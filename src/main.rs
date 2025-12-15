@@ -1,8 +1,5 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use std::collections::HashMap;
-use std::io::Write;
-use std::time::Instant;
 
 use evdev::Key;
 
@@ -22,20 +19,9 @@ mod tests;
 use socd::SocdCleaner;
 use uinput::VirtualKeyboard;
 
-const TAPPING_TERM_MS: u64 = 130;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[allow(dead_code)]
-enum Layer {
-    Base,
-    HomeRowMod,
-    Nav,
-    Game,
-    Fn,
-}
-
 /// What a specific key press is doing (recorded when pressed, replayed on release)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]  // Optimize discriminant to single byte
 enum Action {
     /// This key press activated a modifier
     Modifier(Key),
@@ -46,38 +32,81 @@ enum Action {
     /// This key activated nav layer
     NavLayerActivation,
     /// Home row mod waiting for decision (tap or hold)
-    HomeRowModPending { hrm_key: Key, press_time: Instant },
+    HomeRowModPending { hrm_key: Key },
 }
 
 /// What a physical key is currently doing
-#[derive(Debug, Clone)]
+/// Fixed-size array for max 2 actions - zero allocations!
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]  // Predictable memory layout
 struct KeyAction {
-    actions: Vec<Action>,
+    // Fixed array: max 2 actions (most keys = 1, some = 2, never more)
+    actions: [Option<Action>; 2],
+    // Track number of actions for fast iteration
+    count: u8,
+}
+
+impl Default for KeyAction {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::empty()
+    }
 }
 
 impl KeyAction {
-    fn new() -> Self {
+    #[inline(always)]
+    const fn empty() -> Self {
         Self {
-            actions: Vec::with_capacity(2), // Most keys do 1-2 things
+            actions: [None, None],
+            count: 0,
         }
     }
 
+    #[inline(always)]
+    fn new() -> Self {
+        Self {
+            actions: [None, None],
+            count: 0,
+        }
+    }
+
+    #[inline(always)]
     fn add(&mut self, action: Action) {
-        self.actions.push(action);
+        self.actions[self.count as usize] = Some(action);
+        self.count += 1;
+    }
+
+    #[inline(always)]
+    fn is_occupied(&self) -> bool {
+        self.count > 0
+    }
+
+    #[inline(always)]
+    fn clear(&mut self) {
+        self.actions = [None, None];
+        self.count = 0;
+    }
+
+    #[inline(always)]
+    fn iter(&self) -> impl Iterator<Item = &Action> {
+        self.actions[0..self.count as usize].iter().filter_map(|a| a.as_ref())
     }
 }
 
 /// Reference counting for modifiers (fast array-based lookup)
 #[derive(Debug, Clone)]
+#[repr(C, align(8))]  // Align to cache line for better performance
 struct ModifierState {
     counts: [u8; 8], // Fixed size array for speed
 }
 
 impl ModifierState {
+    #[inline(always)]
     fn new() -> Self {
         Self { counts: [0; 8] }
     }
 
+    #[inline(always)]
     fn modifier_index(key: Key) -> Option<usize> {
         match key {
             Key::KEY_LEFTSHIFT => Some(0),
@@ -92,12 +121,42 @@ impl ModifierState {
         }
     }
 
+    #[inline(always)]
+    const fn index_to_key(idx: usize) -> Key {
+        match idx {
+            0 => Key::KEY_LEFTSHIFT,
+            1 => Key::KEY_RIGHTSHIFT,
+            2 => Key::KEY_LEFTCTRL,
+            3 => Key::KEY_RIGHTCTRL,
+            4 => Key::KEY_LEFTALT,
+            5 => Key::KEY_RIGHTALT,
+            6 => Key::KEY_LEFTMETA,
+            7 => Key::KEY_RIGHTMETA,
+            _ => Key::KEY_RESERVED,
+        }
+    }
+
+    #[inline]
+    fn get_active_modifiers(&self) -> [Option<Key>; 8] {
+        let mut active = [None; 8];
+        let mut write_idx = 0;
+        for (idx, &count) in self.counts.iter().enumerate() {
+            if count > 0 {
+                active[write_idx] = Some(Self::index_to_key(idx));
+                write_idx += 1;
+            }
+        }
+        active
+    }
+
+    #[inline(always)]
     fn increment(&mut self, key: Key) {
         if let Some(idx) = Self::modifier_index(key) {
             self.counts[idx] = self.counts[idx].saturating_add(1);
         }
     }
 
+    #[inline(always)]
     fn decrement(&mut self, key: Key) -> bool {
         if let Some(idx) = Self::modifier_index(key) {
             if self.counts[idx] > 0 {
@@ -109,124 +168,209 @@ impl ModifierState {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
+#[repr(C, packed)]  // Pack tightly, no padding
 struct HomeRowMod {
-    key: Key,
     modifier: Key,
     base_key: Key,
 }
 
 struct KeyboardState {
-    layers: Vec<Layer>,
-    home_row_mods: HashMap<Key, HomeRowMod>,
-    socd_cleaner: SocdCleaner,
-    game_mode: bool,
-
-    // Fast lookup for what each physical key is doing
-    held_keys: HashMap<Key, KeyAction>,
+    // Memory layout optimized: hot fields first, cold fields last
+    // TRUE O(1) array lookup by key code (0-255) - NO HASHING!
+    // Box to save stack space (256 * ~40 bytes = 10KB on stack otherwise)
+    held_keys: Box<[KeyAction; 256]>,
+    // Pending home row mods as bit flags (8 keys = 1 byte!)
+    pending_hrm_keys: u8,
     // Reference counting for modifiers
     modifier_state: ModifierState,
-    // Nav layer tracking
+    socd_cleaner: SocdCleaner,
+    // Frequently accessed bools (packed together for cache)
+    game_mode: bool,
     nav_layer_active: bool,
-    // Password typer state (resets when leaving nav layer)
     password_typed_in_nav: bool,
-    // Password from config
-    password: Option<String>,
+    caps_lock_on: bool,
+    // Cold fields (rarely accessed) - Box to save stack space
+    password: Option<Box<str>>,
 }
 
 impl KeyboardState {
     fn new(password: Option<String>) -> Self {
+        // Create array with vec and convert to boxed array
+        let mut held_keys_vec = Vec::with_capacity(256);
+        for _ in 0..256 {
+            held_keys_vec.push(KeyAction::empty());
+        }
+        let held_keys: Box<[KeyAction; 256]> = held_keys_vec.into_boxed_slice().try_into().unwrap();
+
         Self {
-            layers: vec![Layer::Base, Layer::HomeRowMod],
-            home_row_mods: Self::init_home_row_mods(),
+            held_keys,
+            // Bit flags: 0 = no pending keys
+            pending_hrm_keys: 0,
+            modifier_state: ModifierState::new(),
             socd_cleaner: SocdCleaner::new(),
             game_mode: false,
-            held_keys: HashMap::new(),
-            modifier_state: ModifierState::new(),
             nav_layer_active: false,
             password_typed_in_nav: false,
-            password,
+            caps_lock_on: false,
+            // Box password to save stack space (cold data, rarely accessed)
+            password: password.map(|s| s.into_boxed_str()),
         }
     }
 
-    fn init_home_row_mods() -> HashMap<Key, HomeRowMod> {
-        let mut mods = HashMap::new();
-
-        // Left hand home row mods
-        mods.insert(
-            Key::KEY_A,
-            HomeRowMod {
-                key: Key::KEY_A,
-                modifier: Key::KEY_LEFTMETA,
-                base_key: Key::KEY_A,
-            },
-        );
-        mods.insert(
-            Key::KEY_S,
-            HomeRowMod {
-                key: Key::KEY_S,
-                modifier: Key::KEY_LEFTALT,
-                base_key: Key::KEY_S,
-            },
-        );
-        mods.insert(
-            Key::KEY_D,
-            HomeRowMod {
-                key: Key::KEY_D,
-                modifier: Key::KEY_LEFTCTRL,
-                base_key: Key::KEY_D,
-            },
-        );
-        mods.insert(
-            Key::KEY_F,
-            HomeRowMod {
-                key: Key::KEY_F,
-                modifier: Key::KEY_LEFTSHIFT,
-                base_key: Key::KEY_F,
-            },
-        );
-
-        // Right hand home row mods
-        mods.insert(
-            Key::KEY_J,
-            HomeRowMod {
-                key: Key::KEY_J,
-                modifier: Key::KEY_RIGHTSHIFT,
-                base_key: Key::KEY_J,
-            },
-        );
-        mods.insert(
-            Key::KEY_K,
-            HomeRowMod {
-                key: Key::KEY_K,
-                modifier: Key::KEY_RIGHTCTRL,
-                base_key: Key::KEY_K,
-            },
-        );
-        mods.insert(
-            Key::KEY_L,
-            HomeRowMod {
-                key: Key::KEY_L,
-                modifier: Key::KEY_RIGHTALT,
-                base_key: Key::KEY_L,
-            },
-        );
-        mods.insert(
-            Key::KEY_SEMICOLON,
-            HomeRowMod {
-                key: Key::KEY_SEMICOLON,
-                modifier: Key::KEY_RIGHTMETA,
-                base_key: Key::KEY_SEMICOLON,
-            },
-        );
-
-        mods
+    // TRUE O(1) operations - direct array indexing, zero hashing!
+    #[inline(always)]
+    fn get_held_key(&self, key: Key) -> Option<&KeyAction> {
+        let slot = &self.held_keys[key.code() as usize];
+        if slot.is_occupied() {
+            Some(slot)
+        } else {
+            None
+        }
     }
 
+    #[inline(always)]
+    fn get_held_key_mut(&mut self, key: Key) -> Option<&mut KeyAction> {
+        let slot = &mut self.held_keys[key.code() as usize];
+        if slot.is_occupied() {
+            Some(slot)
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    fn insert_held_key(&mut self, key: Key, action: KeyAction) {
+        self.held_keys[key.code() as usize] = action;
+    }
+
+    #[inline(always)]
+    fn remove_held_key(&mut self, key: Key) -> Option<KeyAction> {
+        let slot = &mut self.held_keys[key.code() as usize];
+        if slot.is_occupied() {
+            let mut taken = KeyAction::empty();
+            std::mem::swap(slot, &mut taken);
+            Some(taken)
+        } else {
+            None
+        }
+    }
+
+    // Helper: Convert key to bit index for pending_hrm_keys (0-7)
+    #[inline(always)]
+    #[must_use]
+    const fn hrm_key_to_bit(key: Key) -> u8 {
+        match key {
+            Key::KEY_A => 0,
+            Key::KEY_S => 1,
+            Key::KEY_D => 2,
+            Key::KEY_F => 3,
+            Key::KEY_J => 4,
+            Key::KEY_K => 5,
+            Key::KEY_L => 6,
+            Key::KEY_SEMICOLON => 7,
+            _ => 255, // Invalid
+        }
+    }
+
+    // Check if a home row mod key is pending
+    #[inline(always)]
+    #[must_use]
+    fn is_hrm_pending(&self, key: Key) -> bool {
+        let bit = Self::hrm_key_to_bit(key);
+        bit < 8 && (self.pending_hrm_keys & (1 << bit)) != 0
+    }
+
+    // Set a home row mod key as pending
+    #[inline(always)]
+    fn set_hrm_pending(&mut self, key: Key) {
+        let bit = Self::hrm_key_to_bit(key);
+        if bit < 8 {
+            self.pending_hrm_keys |= 1 << bit;
+        }
+    }
+
+    // Clear a home row mod key from pending
+    #[inline(always)]
+    fn clear_hrm_pending(&mut self, key: Key) {
+        let bit = Self::hrm_key_to_bit(key);
+        if bit < 8 {
+            self.pending_hrm_keys &= !(1 << bit);
+        }
+    }
+
+    // Check if ANY home row mod keys are pending
+    #[inline(always)]
+    #[must_use]
+    const fn has_pending_hrm(&self) -> bool {
+        self.pending_hrm_keys != 0
+    }
+
+    // Array-based lookup instead of HashMap (compiler optimizes to jump table)
+    #[inline(always)]
+    #[must_use]
+    const fn get_home_row_mod(key: Key) -> Option<HomeRowMod> {
+        match key {
+            Key::KEY_A => Some(HomeRowMod {
+                modifier: Key::KEY_LEFTMETA,
+                base_key: Key::KEY_A,
+            }),
+            Key::KEY_S => Some(HomeRowMod {
+                modifier: Key::KEY_LEFTALT,
+                base_key: Key::KEY_S,
+            }),
+            Key::KEY_D => Some(HomeRowMod {
+                modifier: Key::KEY_LEFTCTRL,
+                base_key: Key::KEY_D,
+            }),
+            Key::KEY_F => Some(HomeRowMod {
+                modifier: Key::KEY_LEFTSHIFT,
+                base_key: Key::KEY_F,
+            }),
+            Key::KEY_J => Some(HomeRowMod {
+                modifier: Key::KEY_RIGHTSHIFT,
+                base_key: Key::KEY_J,
+            }),
+            Key::KEY_K => Some(HomeRowMod {
+                modifier: Key::KEY_RIGHTCTRL,
+                base_key: Key::KEY_K,
+            }),
+            Key::KEY_L => Some(HomeRowMod {
+                modifier: Key::KEY_RIGHTALT,
+                base_key: Key::KEY_L,
+            }),
+            Key::KEY_SEMICOLON => Some(HomeRowMod {
+                modifier: Key::KEY_RIGHTMETA,
+                base_key: Key::KEY_SEMICOLON,
+            }),
+            _ => None,
+        }
+    }
+
+    #[inline(always)]
+    #[must_use]
+    const fn is_home_row_mod(key: Key) -> bool {
+        matches!(
+            key,
+            Key::KEY_A | Key::KEY_S | Key::KEY_D | Key::KEY_F |
+            Key::KEY_J | Key::KEY_K | Key::KEY_L | Key::KEY_SEMICOLON
+        )
+    }
+
+    #[inline(always)]
+    #[must_use]
     const fn is_wasd_key(key: Key) -> bool {
         matches!(key, Key::KEY_W | Key::KEY_A | Key::KEY_S | Key::KEY_D)
     }
 }
+
+// Compile-time assertions to ensure optimal memory layout
+const _: () = {
+    // Ensure ModifierState is small (8 bytes)
+    assert!(std::mem::size_of::<ModifierState>() == 8);
+    // Ensure HomeRowMod fits in 8 bytes (2 Keys = 2*u16 = 4 bytes, padded to 8)
+    assert!(std::mem::size_of::<HomeRowMod>() <= 8);
+};
 
 #[derive(Parser)]
 #[command(name = "keyboard-middleware")]

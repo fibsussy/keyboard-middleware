@@ -1,8 +1,8 @@
 use evdev::Key;
-use std::collections::HashSet;
 
 /// SOCD (Simultaneous Opposite Cardinal Directions) Cleaner
 /// Implements "last input priority" to prevent impossible inputs in games
+/// Uses simple array instead of HashSet for TRUE O(1) operations
 pub struct SocdCleaner {
     w_held: bool,
     a_held: bool,
@@ -10,6 +10,8 @@ pub struct SocdCleaner {
     d_held: bool,
     last_vertical: Option<Key>,
     last_horizontal: Option<Key>,
+    // Simple 2-element array (max one vertical + one horizontal key)
+    active_keys: [Option<Key>; 2],
 }
 
 impl SocdCleaner {
@@ -21,6 +23,7 @@ impl SocdCleaner {
             d_held: false,
             last_vertical: None,
             last_horizontal: None,
+            active_keys: [None; 2],
         }
     }
 
@@ -31,9 +34,11 @@ impl SocdCleaner {
         self.d_held = false;
         self.last_vertical = None;
         self.last_horizontal = None;
+        self.active_keys = [None; 2];
     }
 
-    pub fn handle_press(&mut self, key: Key) -> HashSet<Key> {
+    #[inline]
+    pub fn handle_press(&mut self, key: Key) -> &[Option<Key>; 2] {
         match key {
             Key::KEY_W => {
                 self.w_held = true;
@@ -57,7 +62,8 @@ impl SocdCleaner {
         self.compute_active_keys()
     }
 
-    pub fn handle_release(&mut self, key: Key) -> HashSet<Key> {
+    #[inline]
+    pub fn handle_release(&mut self, key: Key) -> &[Option<Key>; 2] {
         match key {
             Key::KEY_W => self.w_held = false,
             Key::KEY_A => self.a_held = false,
@@ -69,34 +75,35 @@ impl SocdCleaner {
         self.compute_active_keys()
     }
 
-    fn compute_active_keys(&self) -> HashSet<Key> {
-        let mut active = HashSet::new();
+    #[inline]
+    fn compute_active_keys(&mut self) -> &[Option<Key>; 2] {
+        // Array index 0 = vertical key, 1 = horizontal key
 
         // Vertical resolution
         if self.w_held && !self.s_held {
-            active.insert(Key::KEY_W);
+            self.active_keys[0] = Some(Key::KEY_W);
         } else if self.s_held && !self.w_held {
-            active.insert(Key::KEY_S);
+            self.active_keys[0] = Some(Key::KEY_S);
         } else if self.w_held && self.s_held {
             // Both held: last input wins
-            if let Some(last) = self.last_vertical {
-                active.insert(last);
-            }
+            self.active_keys[0] = self.last_vertical;
+        } else {
+            self.active_keys[0] = None;
         }
 
         // Horizontal resolution
         if self.a_held && !self.d_held {
-            active.insert(Key::KEY_A);
+            self.active_keys[1] = Some(Key::KEY_A);
         } else if self.d_held && !self.a_held {
-            active.insert(Key::KEY_D);
+            self.active_keys[1] = Some(Key::KEY_D);
         } else if self.a_held && self.d_held {
             // Both held: last input wins
-            if let Some(last) = self.last_horizontal {
-                active.insert(last);
-            }
+            self.active_keys[1] = self.last_horizontal;
+        } else {
+            self.active_keys[1] = None;
         }
 
-        active
+        &self.active_keys
     }
 }
 

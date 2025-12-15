@@ -1,12 +1,17 @@
 use anyhow::Result;
 use evdev::{uinput::VirtualDeviceBuilder, AttributeSet, EventType, InputEvent, Key};
-use std::collections::HashSet;
+use smallvec::SmallVec;
 use std::thread;
 use std::time::Duration;
 
+// Constants for frequently used event values (avoid recomputation)
+const SYN_REPORT: i32 = 0;
+const SYN_CODE: u16 = 0;
+
 pub struct VirtualKeyboard {
     device: evdev::uinput::VirtualDevice,
-    active_socd_keys: HashSet<Key>,
+    // Simple 2-element array for SOCD (max one vertical + one horizontal)
+    active_socd_keys: [Option<Key>; 2],
 }
 
 impl VirtualKeyboard {
@@ -29,79 +34,176 @@ impl VirtualKeyboard {
 
         Ok(Self {
             device,
-            active_socd_keys: HashSet::new(),
+            active_socd_keys: [None; 2],
         })
     }
 
+    #[inline(always)]
     pub fn press_key(&mut self, key: Key) -> Result<()> {
         let events = [
             InputEvent::new(EventType::KEY, key.code(), 1),
-            InputEvent::new(EventType::SYNCHRONIZATION, 0, 0), // SYN_REPORT
+            InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT),
         ];
         self.device.emit(&events)?;
         Ok(())
     }
 
+    #[inline(always)]
     pub fn release_key(&mut self, key: Key) -> Result<()> {
         let events = [
             InputEvent::new(EventType::KEY, key.code(), 0),
-            InputEvent::new(EventType::SYNCHRONIZATION, 0, 0), // SYN_REPORT
+            InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT),
         ];
         self.device.emit(&events)?;
         Ok(())
     }
 
+    #[inline(always)]
     pub fn tap_key(&mut self, key: Key) -> Result<()> {
         // Emit press + release as a single batch with SYN
         let events = [
             InputEvent::new(EventType::KEY, key.code(), 1),
-            InputEvent::new(EventType::SYNCHRONIZATION, 0, 0),
+            InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT),
             InputEvent::new(EventType::KEY, key.code(), 0),
-            InputEvent::new(EventType::SYNCHRONIZATION, 0, 0),
+            InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT),
         ];
         self.device.emit(&events)?;
         Ok(())
     }
 
-    pub fn update_socd_keys(&mut self, new_keys: HashSet<Key>) -> Result<()> {
-        // Collect keys to release and press first
-        let keys_to_release: Vec<Key> = self
-            .active_socd_keys
-            .difference(&new_keys)
-            .copied()
-            .collect();
-        let keys_to_press: Vec<Key> = new_keys
-            .difference(&self.active_socd_keys)
-            .copied()
-            .collect();
+    #[inline]
+    pub fn update_socd_keys(&mut self, new_keys: &[Option<Key>; 2]) -> Result<()> {
+        // Ultra-optimized: batch ALL events into single emit
+        let mut events = SmallVec::<[InputEvent; 8]>::new();
 
         // Release keys that are no longer active
-        for key in keys_to_release {
-            self.release_key(key)?;
+        for &old_key_opt in &self.active_socd_keys {
+            if let Some(old_key) = old_key_opt {
+                // Check if this key is still in new_keys
+                if !new_keys.contains(&Some(old_key)) {
+                    events.push(InputEvent::new(EventType::KEY, old_key.code(), 0));
+                    events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
+                }
+            }
         }
 
         // Press keys that are newly active
-        for key in keys_to_press {
-            self.press_key(key)?;
+        for &new_key_opt in new_keys {
+            if let Some(new_key) = new_key_opt {
+                // Check if this key was already active
+                if !self.active_socd_keys.contains(&Some(new_key)) {
+                    events.push(InputEvent::new(EventType::KEY, new_key.code(), 1));
+                    events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
+                }
+            }
         }
 
-        self.active_socd_keys = new_keys;
+        // Only emit if there are changes (common case: already correct state)
+        if !events.is_empty() {
+            self.device.emit(&events)?;
+        }
+
+        // Update state (direct copy)
+        self.active_socd_keys = *new_keys;
         Ok(())
     }
 
     pub fn type_string(&mut self, text: &str) -> Result<()> {
+        // INSTANT typing - batch all events into single emit for maximum speed
+        let mut events = SmallVec::<[InputEvent; 128]>::new();
+
         for ch in text.chars() {
             let (key, needs_shift) = char_to_key(ch);
+
+            // Press shift if needed
             if needs_shift {
-                self.press_key(Key::KEY_LEFTSHIFT)?;
+                events.push(InputEvent::new(EventType::KEY, Key::KEY_LEFTSHIFT.code(), 1));
+                events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
             }
-            self.tap_key(key)?;
+
+            // Press key
+            events.push(InputEvent::new(EventType::KEY, key.code(), 1));
+            events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
+
+            // Release key
+            events.push(InputEvent::new(EventType::KEY, key.code(), 0));
+            events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
+
+            // Release shift if needed
             if needs_shift {
-                self.release_key(Key::KEY_LEFTSHIFT)?;
+                events.push(InputEvent::new(EventType::KEY, Key::KEY_LEFTSHIFT.code(), 0));
+                events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
             }
-            // Small delay between characters
-            thread::sleep(Duration::from_millis(5));
         }
+
+        // Emit ALL events at once - INSTANT password typing!
+        self.device.emit(&events)?;
+        Ok(())
+    }
+
+    pub fn type_string_with_mods(&mut self, text: &str, active_mods: &[Option<Key>], caps_lock_on: bool) -> Result<()> {
+        // STOW/UNSTOW pattern: save mods AND caps lock, type clean, restore everything
+        let mut events = SmallVec::<[InputEvent; 256]>::new();
+
+        // STOW: Turn off caps lock if it's on (toggle state, not a modifier)
+        if caps_lock_on {
+            events.push(InputEvent::new(EventType::KEY, Key::KEY_CAPSLOCK.code(), 1));
+            events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
+            events.push(InputEvent::new(EventType::KEY, Key::KEY_CAPSLOCK.code(), 0));
+            events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
+        }
+
+        // STOW: Release all active modifiers
+        for &mod_key_opt in active_mods {
+            if let Some(mod_key) = mod_key_opt {
+                events.push(InputEvent::new(EventType::KEY, mod_key.code(), 0));
+                events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
+            }
+        }
+
+        // TYPE: Password in clean state (no modifiers or caps lock active)
+        for ch in text.chars() {
+            let (key, needs_shift) = char_to_key(ch);
+
+            // Press shift if needed
+            if needs_shift {
+                events.push(InputEvent::new(EventType::KEY, Key::KEY_LEFTSHIFT.code(), 1));
+                events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
+            }
+
+            // Press key
+            events.push(InputEvent::new(EventType::KEY, key.code(), 1));
+            events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
+
+            // Release key
+            events.push(InputEvent::new(EventType::KEY, key.code(), 0));
+            events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
+
+            // Release shift if needed
+            if needs_shift {
+                events.push(InputEvent::new(EventType::KEY, Key::KEY_LEFTSHIFT.code(), 0));
+                events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
+            }
+        }
+
+        // UNSTOW: Restore all previously active modifiers
+        for &mod_key_opt in active_mods {
+            if let Some(mod_key) = mod_key_opt {
+                events.push(InputEvent::new(EventType::KEY, mod_key.code(), 1));
+                events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
+            }
+        }
+
+        // UNSTOW: Turn caps lock back on if it was on
+        if caps_lock_on {
+            events.push(InputEvent::new(EventType::KEY, Key::KEY_CAPSLOCK.code(), 1));
+            events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
+            events.push(InputEvent::new(EventType::KEY, Key::KEY_CAPSLOCK.code(), 0));
+            events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
+        }
+
+        // Emit ALL events at once - INSTANT with proper modifier AND caps lock handling!
+        self.device.emit(&events)?;
         Ok(())
     }
 }

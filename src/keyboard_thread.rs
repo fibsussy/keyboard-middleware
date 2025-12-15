@@ -4,7 +4,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{mpsc, Arc};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
 use tracing::{debug, error, info};
 
 use crate::keyboard_id::KeyboardId;
@@ -111,11 +110,9 @@ impl KeyboardThread {
                     if should_enable && !state.game_mode {
                         info!("🎮 [{}] Entering game mode (gamescope detected)", name);
                         state.game_mode = true;
-                        state.layers = vec![crate::Layer::Base, crate::Layer::Game];
                     } else if !should_enable && state.game_mode {
                         info!("💻 [{}] Exiting game mode (left gamescope)", name);
                         state.game_mode = false;
-                        state.layers = vec![crate::Layer::Base, crate::Layer::HomeRowMod];
                         state.socd_cleaner.reset();
                     }
                 }
@@ -131,16 +128,14 @@ impl KeyboardThread {
             match device.fetch_events() {
                 Ok(events) => {
                     for event in events {
-                        // Use blocking runtime for async process_event
-                        let runtime = tokio::runtime::Runtime::new().unwrap();
-                        if let Err(e) = runtime.block_on(process_event(event, &mut state, &mut vkbd)) {
+                        if let Err(e) = process_event(event, &mut state, &mut vkbd) {
                             error!("[{}] Error processing event: {}", name, e);
                         }
                     }
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    // No events available, sleep briefly
-                    thread::sleep(Duration::from_millis(1));
+                    // No events available, yield to scheduler (much lower latency than sleep)
+                    thread::yield_now();
                 }
                 Err(e) => {
                     error!("[{}] Error fetching events: {}", name, e);
