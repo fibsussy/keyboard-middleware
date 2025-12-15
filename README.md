@@ -18,7 +18,6 @@ A multi-keyboard middleware daemon for Linux with IPC-based architecture that pr
 - 130ms tapping term for home row mods
 - IPC-based daemon/client architecture
 - Systemd user service integration
-- **Safe Eject**: Press Equals (=) key to release all modifiers and shut down daemon
 
 ## Architecture
 
@@ -213,24 +212,6 @@ Game mode is **only** controlled by the niri monitor watching window focus:
   - Nav layer active
 
 **No manual controls:** Game mode cannot be toggled manually - it is purely automatic based on which window has focus.
-
-## Safe Eject
-
-**Emergency shutdown**: Press the **Equals (=)** key to immediately:
-- Release all held modifiers
-- Shut down the daemon cleanly
-- Restore full keyboard control
-
-Use this if:
-- Keys get stuck
-- Modifiers won't release
-- The daemon is misbehaving
-- You need to quickly regain normal keyboard control
-
-After pressing equals, restart the daemon with:
-```bash
-systemctl --user restart keyboard-middleware
-```
 
 ## Requirements
 
