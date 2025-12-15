@@ -8,9 +8,10 @@ use tracing::{debug, error, info};
 
 use crate::config::KeyRemapping;
 use crate::keyboard_id::KeyboardId;
+use crate::keyboard_state::KeyboardState;
 use crate::niri::NiriEvent;
 use crate::process_event_new::process_event;
-use crate::{KeyboardState, VirtualKeyboard};
+use crate::uinput::VirtualKeyboard;
 
 /// Command sent to a keyboard thread
 pub enum ThreadCommand {

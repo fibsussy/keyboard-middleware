@@ -4,7 +4,8 @@ use anyhow::Result;
 use evdev::{InputEvent, EventType, Key};
 use tracing::info;
 
-use crate::{KeyboardState, Action, KeyAction, VirtualKeyboard};
+use crate::keyboard_state::{Action, KeyAction, KeyboardState};
+use crate::uinput::VirtualKeyboard;
 
 // Branch prediction hints for hot path optimization
 #[inline(always)]
