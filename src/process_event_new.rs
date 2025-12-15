@@ -55,9 +55,9 @@ pub fn process_event(
     if likely(pressed) {
         let mut key_action = KeyAction::new();
 
-        // Track Caps Lock toggle (note: Caps/Esc are swapped by map_caps_esc)
-        // Physical ESC becomes CAPSLOCK after mapping
-        if unlikely(key == Key::KEY_ESC) {
+        // Track Caps Lock toggle
+        // Only toggle if ESC is mapped to CAPSLOCK (default behavior when esc_to_grave is false)
+        if unlikely(key == Key::KEY_ESC && state.key_remapping.caps_to_esc && !state.key_remapping.esc_to_grave) {
             state.caps_lock_on = !state.caps_lock_on;
         }
 
@@ -167,7 +167,7 @@ pub fn process_event(
                 }
                 _ => {
                     // Other keys pass through normally in nav layer
-                    let final_key = map_caps_esc(key);
+                    let final_key = apply_key_remapping(key, &state.key_remapping);
                     vkbd.press_key(final_key)?;
                     key_action.add(Action::RegularKey(final_key));
                 }
@@ -251,14 +251,7 @@ pub fn process_event(
         }
 
         // === REGULAR KEY ===
-        // Only map caps/esc for those two specific keys (faster than calling fn every time)
-        let final_key = if unlikely(key == Key::KEY_CAPSLOCK) {
-            Key::KEY_ESC
-        } else if unlikely(key == Key::KEY_ESC) {
-            Key::KEY_CAPSLOCK
-        } else {
-            key
-        };
+        let final_key = apply_key_remapping(key, &state.key_remapping);
         vkbd.press_key(final_key)?;
         key_action.add(Action::RegularKey(final_key));
         state.insert_held_key(key, key_action);
@@ -308,11 +301,27 @@ pub fn process_event(
     Ok(())
 }
 
+/// Apply key remapping based on configuration
 #[inline(always)]
-const fn map_caps_esc(key: Key) -> Key {
+fn apply_key_remapping(key: Key, remapping: &crate::config::KeyRemapping) -> Key {
     match key {
-        Key::KEY_CAPSLOCK => Key::KEY_ESC,
-        Key::KEY_ESC => Key::KEY_CAPSLOCK,
+        Key::KEY_CAPSLOCK => {
+            if remapping.caps_to_esc {
+                Key::KEY_ESC
+            } else {
+                key
+            }
+        }
+        Key::KEY_ESC => {
+            if remapping.esc_to_grave {
+                Key::KEY_GRAVE
+            } else if remapping.caps_to_esc {
+                // Default: swap ESC to CAPSLOCK when caps_to_esc is enabled
+                Key::KEY_CAPSLOCK
+            } else {
+                key
+            }
+        }
         _ => key,
     }
 }

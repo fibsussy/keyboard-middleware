@@ -7,7 +7,7 @@ use std::thread;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
-use crate::config::Config;
+use crate::config::{Config, KeyRemapping};
 use crate::ipc::{IpcRequest, IpcResponse, IpcServer, KeyboardInfo};
 use crate::keyboard_id::{find_all_keyboards, KeyboardId};
 use crate::keyboard_thread::KeyboardThread;
@@ -275,6 +275,17 @@ impl Daemon {
         result
     }
 
+    /// Get key remapping configuration for a keyboard
+    /// Returns custom config if set, otherwise default
+    fn get_key_remapping(&self, id: &KeyboardId) -> KeyRemapping {
+        self.config
+            .key_remapping
+            .as_ref()
+            .and_then(|map| map.get(id.as_str()))
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// Initialize enabled_keyboards set if needed (creates empty set by default)
     fn init_enabled_set(&mut self) {
         if self.config.enabled_keyboards.is_none() {
@@ -298,12 +309,16 @@ impl Daemon {
         let (niri_tx, niri_rx) = mpsc::channel();
         niri::start_niri_monitor(niri_tx);
 
+        // Get key remapping for this keyboard
+        let key_remapping = self.get_key_remapping(&id);
+
         let thread = KeyboardThread::spawn(
             id.clone(),
             device,
             name.clone(),
             niri_rx,
             self.config.password.clone(),
+            key_remapping,
         )?;
 
         self.threads.insert(id.clone(), thread);

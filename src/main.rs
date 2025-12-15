@@ -13,6 +13,8 @@ mod process_event_new;
 mod socd;
 mod uinput;
 
+use config::KeyRemapping;
+
 #[cfg(test)]
 mod tests;
 
@@ -185,6 +187,8 @@ struct KeyboardState {
     // Reference counting for modifiers
     modifier_state: ModifierState,
     socd_cleaner: SocdCleaner,
+    // Key remapping configuration (stack-allocated, ~2 bytes)
+    key_remapping: KeyRemapping,
     // Frequently accessed bools (packed together for cache)
     game_mode: bool,
     nav_layer_active: bool,
@@ -195,7 +199,7 @@ struct KeyboardState {
 }
 
 impl KeyboardState {
-    fn new(password: Option<String>) -> Self {
+    fn new(password: Option<String>, key_remapping: KeyRemapping) -> Self {
         // Create array with vec and convert to boxed array
         let mut held_keys_vec = Vec::with_capacity(256);
         for _ in 0..256 {
@@ -209,6 +213,7 @@ impl KeyboardState {
             pending_hrm_keys: 0,
             modifier_state: ModifierState::new(),
             socd_cleaner: SocdCleaner::new(),
+            key_remapping,
             game_mode: false,
             nav_layer_active: false,
             password_typed_in_nav: false,

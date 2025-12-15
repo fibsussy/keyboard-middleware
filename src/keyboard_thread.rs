@@ -6,6 +6,7 @@ use std::sync::{mpsc, Arc};
 use std::thread::{self, JoinHandle};
 use tracing::{debug, error, info};
 
+use crate::config::KeyRemapping;
 use crate::keyboard_id::KeyboardId;
 use crate::niri::NiriEvent;
 use crate::process_event_new::process_event;
@@ -33,6 +34,7 @@ impl KeyboardThread {
         name: String,
         niri_rx: Receiver<NiriEvent>,
         password: Option<String>,
+        key_remapping: KeyRemapping,
     ) -> Result<Self> {
         let (command_tx, command_rx) = mpsc::channel();
         let running = Arc::new(AtomicBool::new(true));
@@ -50,6 +52,7 @@ impl KeyboardThread {
                 niri_rx,
                 running_clone,
                 password,
+                key_remapping,
             ) {
                 error!("Keyboard thread {} error: {}", name_clone, e);
             }
@@ -75,6 +78,7 @@ impl KeyboardThread {
         niri_rx: Receiver<NiriEvent>,
         running: Arc<AtomicBool>,
         password: Option<String>,
+        key_remapping: KeyRemapping,
     ) -> Result<()> {
         // Grab the device
         device
@@ -88,7 +92,7 @@ impl KeyboardThread {
             .context("Failed to create virtual keyboard")?;
 
         // Initialize state
-        let mut state = KeyboardState::new(password);
+        let mut state = KeyboardState::new(password, key_remapping);
 
         // Main event loop
         loop {

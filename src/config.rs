@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -12,6 +12,32 @@ pub struct Config {
     pub password: Option<String>,
     /// Set of hardware IDs for enabled keyboards (if empty, all keyboards enabled)
     pub enabled_keyboards: Option<HashSet<String>>,
+    /// Per-keyboard key remapping configuration
+    pub key_remapping: Option<HashMap<String, KeyRemapping>>,
+}
+
+/// Key remapping configuration for a keyboard
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KeyRemapping {
+    /// Map Caps Lock to Esc (default: true)
+    #[serde(default = "default_true")]
+    pub caps_to_esc: bool,
+    /// Map Esc to Grave/Tilde (default: false, normally Esc → Caps Lock)
+    #[serde(default)]
+    pub esc_to_grave: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for KeyRemapping {
+    fn default() -> Self {
+        Self {
+            caps_to_esc: true,
+            esc_to_grave: false,
+        }
+    }
 }
 
 impl Default for Config {
@@ -22,6 +48,7 @@ impl Default for Config {
             enable_socd: true,
             password: None,
             enabled_keyboards: None, // None means all keyboards enabled
+            key_remapping: None, // None means use default remapping
         }
     }
 }
