@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use dialoguer::{Confirm, Password};
+use dialoguer::Password;
 use std::path::PathBuf;
 
 use crate::config::Config;
@@ -154,6 +154,7 @@ pub fn handle_list() -> Result<()> {
 
 pub fn handle_toggle() -> Result<()> {
     use console::style;
+    use dialoguer::MultiSelect;
 
     let response = ipc::send_request(&IpcRequest::ListKeyboards)?;
     let keyboards = match response {
@@ -166,45 +167,73 @@ pub fn handle_toggle() -> Result<()> {
         return Ok(());
     }
 
-    println!("\n{}", style("Configure Keyboards:").bold());
-    println!("{}", style("─".repeat(60)).dim());
+    // Show current state
+    println!("\n{}", style("━━━ Keyboard Configuration ━━━").bold());
+    println!("\nCurrent state:");
+    for kbd in &keyboards {
+        if kbd.enabled {
+            println!("  {} {}", style("●").green(), kbd.name);
+        } else {
+            println!("  {} {}", style("○").color256(8), kbd.name);
+        }
+    }
+
+    // Show interactive multi-select
+    println!("\n{} (Space=toggle, Enter=confirm):\n", style("Select keyboards to enable").bold());
+
+    let items: Vec<String> = keyboards
+        .iter()
+        .map(|kb| format!("  {}", kb.name))
+        .collect();
+
+    let defaults: Vec<bool> = keyboards.iter().map(|kb| kb.enabled).collect();
+
+    let selections = MultiSelect::new()
+        .items(&items)
+        .defaults(&defaults)
+        .interact()?;
+
+    // Apply changes
+    println!();
+    let mut changes_made = false;
 
     for (i, kbd) in keyboards.iter().enumerate() {
-        let current_status = if kbd.enabled {
-            style("enabled").green()
-        } else {
-            style("disabled").red()
-        };
+        let should_enable = selections.contains(&i);
+        let currently_enabled = kbd.enabled;
 
-        println!(
-            "\n{}. {} [{}]",
-            i + 1,
-            style(&kbd.name).bold(),
-            current_status
-        );
-
-        let prompt = if kbd.enabled {
-            format!("Disable {}?", kbd.name)
-        } else {
-            format!("Enable {}?", kbd.name)
-        };
-
-        let should_change = Confirm::new()
-            .with_prompt(&prompt)
-            .default(false)
-            .interact()?;
-
-        if should_change {
-            if kbd.enabled {
-                ipc::send_request(&IpcRequest::DisableKeyboard(kbd.hardware_id.clone()))?;
-                println!("  {} Disabled", style("✓").green());
-            } else {
-                ipc::send_request(&IpcRequest::EnableKeyboard(kbd.hardware_id.clone()))?;
-                println!("  {} Enabled", style("✓").green());
+        if should_enable && !currently_enabled {
+            // Enabling a keyboard
+            print!("  {} Enabling {}... ", style("●").green(), kbd.name);
+            std::io::Write::flush(&mut std::io::stdout())?;
+            let response = ipc::send_request(&IpcRequest::EnableKeyboard(kbd.hardware_id.clone()))?;
+            match response {
+                IpcResponse::Ok => {
+                    println!("{}", style("✓").green());
+                    changes_made = true;
+                }
+                _ => println!("{}", style("✗ Failed").red()),
+            }
+        } else if !should_enable && currently_enabled {
+            // Disabling a keyboard
+            print!("  {} Disabling {}... ", style("○").color256(8), kbd.name);
+            std::io::Write::flush(&mut std::io::stdout())?;
+            let response = ipc::send_request(&IpcRequest::DisableKeyboard(kbd.hardware_id.clone()))?;
+            match response {
+                IpcResponse::Ok => {
+                    println!("{}", style("✓").color256(8));
+                    changes_made = true;
+                }
+                _ => println!("{}", style("✗ Failed").red()),
             }
         }
     }
 
-    println!("\n{}", style("Configuration complete!").green());
+    if changes_made {
+        println!("\n{}", style("✓ Configuration updated successfully").green());
+    } else {
+        println!("\n{}", style("No changes made").color256(8));
+    }
+    println!();
+
     Ok(())
 }
