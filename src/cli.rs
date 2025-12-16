@@ -36,9 +36,7 @@ pub enum Commands {
 }
 
 pub fn get_config_path() -> PathBuf {
-    dirs::config_dir()
-        .map(|p| p.join("keyboard-middleware").join("config.toml"))
-        .unwrap_or_else(|| PathBuf::from("config.toml"))
+    dirs::config_dir().map_or_else(|| PathBuf::from("config.toml"), |p| p.join("keyboard-middleware").join("config.toml"))
 }
 
 pub fn handle_set_password() -> Result<()> {
@@ -92,18 +90,14 @@ pub fn handle_stop() -> Result<()> {
     Ok(())
 }
 
-pub fn handle_status() -> Result<()> {
+pub fn handle_status() {
     use console::style;
 
-    match ipc::send_request(&IpcRequest::Ping) {
-        Ok(_) => {
-            println!("{}", style("✓ Daemon is running").green());
-            Ok(())
-        }
-        Err(_) => {
-            println!("{}", style("✗ Daemon is not running").red());
-            std::process::exit(1);
-        }
+    if ipc::send_request(&IpcRequest::Ping).is_ok() {
+        println!("{}", style("✓ Daemon is running").green());
+    } else {
+        println!("{}", style("✗ Daemon is not running").red());
+        std::process::exit(1);
     }
 }
 
@@ -111,9 +105,8 @@ pub fn handle_list() -> Result<()> {
     use console::style;
 
     let response = ipc::send_request(&IpcRequest::ListKeyboards)?;
-    let keyboards = match response {
-        IpcResponse::KeyboardList(kbds) => kbds,
-        _ => return Err(anyhow::anyhow!("Unexpected response")),
+    let IpcResponse::KeyboardList(keyboards) = response else {
+        return Err(anyhow::anyhow!("Unexpected response"));
     };
 
     if keyboards.is_empty() {
@@ -157,9 +150,8 @@ pub fn handle_toggle() -> Result<()> {
     use dialoguer::MultiSelect;
 
     let response = ipc::send_request(&IpcRequest::ListKeyboards)?;
-    let keyboards = match response {
-        IpcResponse::KeyboardList(kbds) => kbds,
-        _ => return Err(anyhow::anyhow!("Unexpected response")),
+    let IpcResponse::KeyboardList(keyboards) = response else {
+        return Err(anyhow::anyhow!("Unexpected response"));
     };
 
     if keyboards.is_empty() {

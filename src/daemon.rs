@@ -235,6 +235,7 @@ impl Daemon {
     }
 
     /// Start threads for all enabled keyboards
+    #[allow(clippy::unnecessary_wraps)]
     fn start_enabled_keyboards(&mut self) -> Result<()> {
         let keyboards = find_all_keyboards();
 
@@ -243,7 +244,7 @@ impl Daemon {
         for (id, (device, name)) in keyboards {
             info!("Checking keyboard: {} ({}), enabled: {}", name, id, self.is_keyboard_enabled(&id));
             if self.is_keyboard_enabled(&id) {
-                self.start_keyboard_thread(&id, device, &name)?;
+                self.start_keyboard_thread(&id, device, &name);
             } else {
                 info!("Skipping disabled keyboard: {} ({})", name, id);
             }
@@ -292,7 +293,7 @@ impl Daemon {
         id: &KeyboardId,
         device: evdev::Device,
         name: &str,
-    ) -> Result<()> {
+    ) {
         info!("Starting keyboard thread for: {} (ID: {})", name, id);
 
         // Each keyboard thread gets its own niri monitor
@@ -314,10 +315,10 @@ impl Daemon {
 
         self.threads.insert(id.clone(), thread);
         info!("Thread started and inserted into HashMap for: {} (ID: {}), total threads: {}", name, id, self.threads.len());
-        Ok(())
     }
 
     /// Handle hotplug events (keyboard connect/disconnect)
+    #[allow(clippy::unnecessary_wraps)]
     fn handle_hotplug(&mut self) -> Result<()> {
         // Re-discover keyboards
         self.discover_keyboards();
@@ -327,7 +328,7 @@ impl Daemon {
         for (id, (device, name)) in keyboards {
             if self.is_keyboard_enabled(&id) && !self.threads.contains_key(&id) {
                 info!("Hotplug: Starting thread for newly connected keyboard: {} ({})", name, id);
-                self.start_keyboard_thread(&id, device, &name)?;
+                self.start_keyboard_thread(&id, device, &name);
             }
         }
 
@@ -455,13 +456,8 @@ impl Daemon {
         } else {
             let mut keyboards = find_all_keyboards();
             if let Some((device, name)) = keyboards.remove(&id) {
-                match self.start_keyboard_thread(&id, device, &name) {
-                    Ok(()) => info!("Enabled and started keyboard: {}", hardware_id),
-                    Err(e) => {
-                        error!("Failed to start keyboard: {}", e);
-                        return IpcResponse::Error(format!("Failed to start keyboard: {e}"));
-                    }
-                }
+                self.start_keyboard_thread(&id, device, &name);
+                info!("Enabled and started keyboard: {}", hardware_id);
             } else {
                 info!("Enabled keyboard {} (not currently connected)", hardware_id);
             }

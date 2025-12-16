@@ -88,13 +88,11 @@ impl VirtualKeyboard {
         }
 
         // Press keys that are newly active
-        for new_key_opt in new_keys {
-            if let Some(new_key) = new_key_opt {
-                // Check if this key was already active
-                if !self.active_socd_keys.contains(&Some(new_key)) {
-                    events.push(InputEvent::new(EventType::KEY, new_key.code(), 1));
-                    events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
-                }
+        for new_key in new_keys.into_iter().flatten() {
+            // Check if this key was already active
+            if !self.active_socd_keys.contains(&Some(new_key)) {
+                events.push(InputEvent::new(EventType::KEY, new_key.code(), 1));
+                events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
             }
         }
 
@@ -105,39 +103,6 @@ impl VirtualKeyboard {
 
         // Update state (direct copy)
         self.active_socd_keys = new_keys;
-        Ok(())
-    }
-
-    pub fn type_string(&mut self, text: &str) -> Result<()> {
-        // INSTANT typing - batch all events into single emit for maximum speed
-        let mut events = SmallVec::<[InputEvent; 128]>::new();
-
-        for ch in text.chars() {
-            let (key, needs_shift) = char_to_key(ch);
-
-            // Press shift if needed
-            if needs_shift {
-                events.push(InputEvent::new(EventType::KEY, Key::KEY_LEFTSHIFT.code(), 1));
-                events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
-            }
-
-            // Press key
-            events.push(InputEvent::new(EventType::KEY, key.code(), 1));
-            events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
-
-            // Release key
-            events.push(InputEvent::new(EventType::KEY, key.code(), 0));
-            events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
-
-            // Release shift if needed
-            if needs_shift {
-                events.push(InputEvent::new(EventType::KEY, Key::KEY_LEFTSHIFT.code(), 0));
-                events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
-            }
-        }
-
-        // Emit ALL events at once - INSTANT password typing!
-        self.device.emit(&events)?;
         Ok(())
     }
 
@@ -282,7 +247,6 @@ const fn char_to_key(ch: char) -> (Key, bool) {
         '&' => (Key::KEY_7, true),
         '*' => (Key::KEY_8, true),
         '(' => (Key::KEY_9, true),
-        ' ' => (Key::KEY_SPACE, false),
         '-' => (Key::KEY_MINUS, false),
         '_' => (Key::KEY_MINUS, true),
         '=' => (Key::KEY_EQUAL, false),

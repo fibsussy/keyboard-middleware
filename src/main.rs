@@ -34,7 +34,10 @@ fn main() -> Result<()> {
     match cli.command {
         Some(Commands::Start) => cli::handle_start(),
         Some(Commands::Stop) => cli::handle_stop(),
-        Some(Commands::Status) => cli::handle_status(),
+        Some(Commands::Status) => {
+            cli::handle_status();
+            Ok(())
+        }
         Some(Commands::List) => cli::handle_list(),
         Some(Commands::Toggle) => cli::handle_toggle(),
         Some(Commands::SetPassword) => cli::handle_set_password(),

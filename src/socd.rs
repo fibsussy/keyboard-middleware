@@ -115,8 +115,8 @@ mod tests {
     fn test_basic_press() {
         let mut socd = SocdCleaner::new();
         let keys = socd.handle_press(Key::KEY_W);
-        assert_eq!(keys.len(), 1);
-        assert!(keys.contains(&Key::KEY_W));
+        assert_eq!(keys.iter().filter(|k| k.is_some()).count(), 1);
+        assert!(keys.contains(&Some(Key::KEY_W)));
     }
 
     #[test]
@@ -126,8 +126,8 @@ mod tests {
         let keys = socd.handle_press(Key::KEY_S);
 
         // Last input priority: S should win
-        assert_eq!(keys.len(), 1);
-        assert!(keys.contains(&Key::KEY_S));
+        assert_eq!(keys.iter().filter(|k| k.is_some()).count(), 1);
+        assert!(keys.contains(&Some(Key::KEY_S)));
     }
 
     #[test]
@@ -138,8 +138,8 @@ mod tests {
         let keys = socd.handle_release(Key::KEY_S);
 
         // After releasing S, W should be active
-        assert_eq!(keys.len(), 1);
-        assert!(keys.contains(&Key::KEY_W));
+        assert_eq!(keys.iter().filter(|k| k.is_some()).count(), 1);
+        assert!(keys.contains(&Some(Key::KEY_W)));
     }
 
     #[test]
@@ -149,8 +149,8 @@ mod tests {
         let keys = socd.handle_press(Key::KEY_A);
 
         // Both should be active (no conflict)
-        assert_eq!(keys.len(), 2);
-        assert!(keys.contains(&Key::KEY_W));
-        assert!(keys.contains(&Key::KEY_A));
+        assert_eq!(keys.iter().filter(|k| k.is_some()).count(), 2);
+        assert!(keys.contains(&Some(Key::KEY_W)));
+        assert!(keys.contains(&Some(Key::KEY_A)));
     }
 }

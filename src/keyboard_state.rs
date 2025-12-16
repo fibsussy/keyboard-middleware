@@ -47,7 +47,7 @@ impl KeyAction {
     }
 
     #[inline(always)]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             actions: [None, None],
             count: 0,
@@ -55,18 +55,18 @@ impl KeyAction {
     }
 
     #[inline(always)]
-    pub fn add(&mut self, action: Action) {
+    pub const fn add(&mut self, action: Action) {
         self.actions[self.count as usize] = Some(action);
         self.count += 1;
     }
 
     #[inline(always)]
-    fn is_occupied(&self) -> bool {
+    const fn is_occupied(&self) -> bool {
         self.count > 0
     }
 
     #[inline(always)]
-    pub fn clear(&mut self) {
+    pub const fn clear(&mut self) {
         self.actions = [None, None];
         self.count = 0;
     }
@@ -131,14 +131,14 @@ impl ModifierState {
     }
 
     #[inline(always)]
-    pub fn increment(&mut self, key: Key) {
+    pub const fn increment(&mut self, key: Key) {
         if let Some(idx) = Self::modifier_index(key) {
             self.counts[idx] = self.counts[idx].saturating_add(1);
         }
     }
 
     #[inline(always)]
-    pub fn decrement(&mut self, key: Key) -> bool {
+    pub const fn decrement(&mut self, key: Key) -> bool {
         if let Some(idx) = Self::modifier_index(key) {
             if self.counts[idx] > 0 {
                 self.counts[idx] -= 1;
@@ -258,7 +258,7 @@ impl KeyboardState {
     }
 
     #[inline(always)]
-    pub fn is_hrm_pending(&self, key: Key) -> bool {
+    pub const fn is_hrm_pending(&self, key: Key) -> bool {
         if let Some(bit) = Self::hrm_key_to_bit(key) {
             (self.pending_hrm_keys & (1 << bit)) != 0
         } else {
@@ -267,14 +267,14 @@ impl KeyboardState {
     }
 
     #[inline(always)]
-    pub fn set_hrm_pending(&mut self, key: Key) {
+    pub const fn set_hrm_pending(&mut self, key: Key) {
         if let Some(bit) = Self::hrm_key_to_bit(key) {
             self.pending_hrm_keys |= 1 << bit;
         }
     }
 
     #[inline(always)]
-    pub fn clear_hrm_pending(&mut self, key: Key) {
+    pub const fn clear_hrm_pending(&mut self, key: Key) {
         if let Some(bit) = Self::hrm_key_to_bit(key) {
             self.pending_hrm_keys &= !(1 << bit);
         }

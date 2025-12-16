@@ -68,23 +68,6 @@ impl KeyboardId {
         Self(hardware_id)
     }
 
-    /// Create a keyboard ID from an evdev device (without path - uses fallback method)
-    pub fn from_device(device: &Device) -> Self {
-        // Fall back to hardware properties
-        let id_product = device.input_id().product();
-        let id_vendor = device.input_id().vendor();
-        let id_version = device.input_id().version();
-        let id_bustype = device.input_id().bus_type();
-        let phys = device.physical_path().unwrap_or("unknown");
-
-        let hardware_id = format!(
-            "{:04x}:{:04x}:{:04x}:{:04x}:{}",
-            id_vendor, id_product, id_version, id_bustype.0, phys
-        );
-
-        Self(hardware_id)
-    }
-
     /// Get the string representation
     pub fn as_str(&self) -> &str {
         &self.0
@@ -139,10 +122,4 @@ pub fn find_all_keyboards() -> HashMap<KeyboardId, (Device, String)> {
     }
 
     keyboards
-}
-
-/// Find a specific keyboard by its hardware ID
-pub fn find_keyboard_by_id(target_id: &KeyboardId) -> Option<(Device, String)> {
-    let mut keyboards = find_all_keyboards();
-    keyboards.remove(target_id)
 }

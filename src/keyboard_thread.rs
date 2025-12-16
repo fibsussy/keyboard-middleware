@@ -22,7 +22,7 @@ pub enum ThreadCommand {
 pub struct KeyboardThread {
     pub keyboard_id: KeyboardId,
     pub name: String,
-    handle: Option<JoinHandle<()>>,
+    _handle: JoinHandle<()>,
     command_tx: mpsc::Sender<ThreadCommand>,
     running: Arc<AtomicBool>,
 }
@@ -64,7 +64,7 @@ impl KeyboardThread {
         Self {
             keyboard_id,
             name,
-            handle: Some(handle),
+            _handle: handle,
             command_tx,
             running,
         }
@@ -160,14 +160,6 @@ impl KeyboardThread {
         let _ = self.command_tx.send(ThreadCommand::Shutdown);
     }
 
-    /// Wait for thread to finish
-    pub fn join(mut self) -> Result<()> {
-        self.shutdown();
-        if let Some(handle) = self.handle.take() {
-            handle.join().map_err(|_| anyhow::anyhow!("Thread panicked"))?;
-        }
-        Ok(())
-    }
 
     /// Check if thread is still running
     pub fn is_running(&self) -> bool {
