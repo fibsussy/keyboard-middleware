@@ -1,5 +1,7 @@
 // New process_event implementation with action recording
 
+#![allow(clippy::inline_always)]
+
 use anyhow::Result;
 use evdev::{InputEvent, EventType, Key};
 use tracing::info;

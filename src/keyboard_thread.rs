@@ -71,6 +71,7 @@ impl KeyboardThread {
     }
 
     /// Main keyboard processing loop
+    #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
     fn run_keyboard_loop(
         keyboard_id: KeyboardId,
         name: &str,
@@ -110,13 +111,13 @@ impl KeyboardThread {
 
             // Check for niri events
             match niri_rx.try_recv() {
-                Ok(NiriEvent::WindowFocusChanged(app_id)) => {
-                    let should_enable = crate::niri::should_enable_gamemode(app_id.as_deref());
+                Ok(NiriEvent::WindowFocusChanged(window_info)) => {
+                    let should_enable = crate::niri::should_enable_gamemode(&window_info);
                     if should_enable && !state.game_mode {
-                        info!("🎮 [{}] Entering game mode (gamescope detected)", name);
+                        info!("🎮 [{}] Entering game mode (game detected)", name);
                         state.game_mode = true;
                     } else if !should_enable && state.game_mode {
-                        info!("💻 [{}] Exiting game mode (left gamescope)", name);
+                        info!("💻 [{}] Exiting game mode", name);
                         state.game_mode = false;
                         state.socd_cleaner.reset();
                     }

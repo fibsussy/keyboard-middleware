@@ -1,3 +1,5 @@
+#![allow(clippy::inline_always)]
+
 use evdev::Key;
 
 use crate::config::KeyRemapping;

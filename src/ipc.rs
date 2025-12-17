@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation)]
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};

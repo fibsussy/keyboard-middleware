@@ -1,7 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-sudo echo
+# Get sudo password early so we don't interrupt later
+sudo -v
 
 # Colors for output
 RED='\033[0;31m'
@@ -88,11 +89,14 @@ main() {
         fi
     fi
 
-    # Stop existing service if running
-    if systemctl --user is-active keyboard-middleware &>/dev/null; then
-        log_info "Stopping existing service..."
-        systemctl --user stop keyboard-middleware
+    # Run cargo check first (non-invasive validation)
+    log_info "Validating code with cargo check..."
+    if ! cargo check --release 2>&1 | tee /tmp/cargo-check-keyboard-middleware.log; then
+        log_error "cargo check failed! Check /tmp/cargo-check-keyboard-middleware.log"
+        exit 1
     fi
+    log_success "Code validation passed"
+    echo
 
     # Build release
     log_info "Building release binary..."
@@ -133,7 +137,7 @@ main() {
     log_success "Systemd daemon reloaded"
     echo
 
-    # Enable service
+    # Enable service (doesn't affect running service)
     log_info "Enabling keyboard-middleware service..."
     if ! systemctl --user enable keyboard-middleware; then
         log_error "Failed to enable service!"
@@ -143,9 +147,15 @@ main() {
     log_success "Service enabled"
     echo
 
+    # Stop existing service if running (done last to preserve keyboard layout)
+    if systemctl --user is-active keyboard-middleware &>/dev/null; then
+        log_info "Stopping existing service for restart..."
+        systemctl --user stop keyboard-middleware
+    fi
+
     # Start/restart service
     log_info "Starting keyboard-middleware service..."
-    if ! systemctl --user restart keyboard-middleware; then
+    if ! systemctl --user start keyboard-middleware; then
         log_error "Failed to start service!"
         log_error "Check logs with: journalctl --user -u keyboard-middleware -f"
         exit 1

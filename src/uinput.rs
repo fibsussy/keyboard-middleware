@@ -1,3 +1,5 @@
+#![allow(clippy::inline_always)]
+
 use anyhow::Result;
 use evdev::{uinput::VirtualDeviceBuilder, AttributeSet, EventType, InputEvent, Key};
 use smallvec::SmallVec;
