@@ -177,12 +177,20 @@ fn check_process_tree(process_id: u32) -> (bool, bool) {
 /// Handle niri window change and return whether game mode should be active
 /// Checks multiple indicators:
 /// 1. App ID is "gamescope"
-/// 2. Process has `IS_GAME=1` environment variable
-/// 3. Process is running through gamescope, gamemode, or custom-gamescope
+/// 2. App ID starts with "steam_app_" (Steam games)
+/// 3. Process has `IS_GAME=1` environment variable
+/// 4. Process is running through gamescope, gamemode, or custom-gamescope
 pub fn should_enable_gamemode(window_info: &WindowInfo) -> bool {
     // Check app ID first (fastest check)
     if window_info.app_id.as_deref() == Some("gamescope") {
         return true;
+    }
+
+    // Check for Steam games (app ID format: steam_app_<appid>)
+    if let Some(app_id) = &window_info.app_id {
+        if app_id.starts_with("steam_app_") {
+            return true;
+        }
     }
 
     // TODO: Add app-specific game detection here
