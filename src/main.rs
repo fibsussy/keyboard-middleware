@@ -88,7 +88,7 @@ fn print_help() {
 }
 
 fn set_password() -> Result<()> {
-    use dialoguer::{Input, Password, Confirm};
+    use dialoguer::{Password, Confirm};
     use config::Config;
 
     println!();

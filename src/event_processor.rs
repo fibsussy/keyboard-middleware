@@ -3,7 +3,7 @@ use evdev::{Device, InputEvent, Key, AttributeSet, EventType};
 use evdev::uinput::{VirtualDevice, VirtualDeviceBuilder};
 use std::sync::mpsc::Receiver;
 use std::thread;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 // SYN event constants
 const SYN_REPORT: i32 = 0;
@@ -16,15 +16,17 @@ use crate::keymap::{evdev_to_keycode, keycode_to_evdev, KeymapProcessor, Process
 /// Process events from a physical keyboard and output to virtual device
 /// Returns immediately after spawning thread
 /// shutdown_rx: Receiver to signal thread shutdown
+/// game_mode_rx: Receiver to signal game mode toggle
 pub fn start_event_processor(
     keyboard_id: KeyboardId,
     mut device: Device,
     keyboard_name: String,
     config: Config,
     shutdown_rx: Receiver<()>,
+    game_mode_rx: Receiver<bool>,
 ) -> Result<()> {
     thread::spawn(move || {
-        if let Err(e) = run_event_processor(&keyboard_id, &mut device, &keyboard_name, &config, shutdown_rx) {
+        if let Err(e) = run_event_processor(&keyboard_id, &mut device, &keyboard_name, &config, shutdown_rx, game_mode_rx) {
             error!("Event processor for {} failed: {}", keyboard_id, e);
         }
         info!("Event processor thread exiting for: {}", keyboard_id);
@@ -39,6 +41,7 @@ fn run_event_processor(
     keyboard_name: &str,
     config: &Config,
     shutdown_rx: Receiver<()>,
+    game_mode_rx: Receiver<bool>,
 ) -> Result<()> {
     info!("Starting event processor for: {} ({})", keyboard_name, keyboard_id);
 
@@ -70,6 +73,21 @@ fn run_event_processor(
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
                 // No shutdown signal, continue
+            }
+        }
+
+        // Check for game mode toggle (non-blocking)
+        match game_mode_rx.try_recv() {
+            Ok(active) => {
+                info!("Game mode {} for: {}", if active { "enabled" } else { "disabled" }, keyboard_name);
+                keymap.set_game_mode(active);
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                // No game mode toggle, continue
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                // Game mode channel disconnected, just log and continue
+                debug!("Game mode channel disconnected for: {}", keyboard_name);
             }
         }
 

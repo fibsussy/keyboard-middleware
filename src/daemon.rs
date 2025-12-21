@@ -1,10 +1,9 @@
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Read};
 use std::os::unix::net::UnixListener;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, channel, Receiver, Sender};
-use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
@@ -13,6 +12,7 @@ use crate::config::Config;
 use crate::event_processor;
 use crate::keyboard_id::{find_all_keyboards, KeyboardId};
 use crate::ipc::{get_socket_path, IpcRequest, IpcResponse};
+use crate::niri::{self, NiriEvent};
 
 /// Hotplug event from udev monitor
 #[derive(Debug)]
@@ -35,10 +35,16 @@ pub struct Daemon {
     hotplug_rx: Receiver<HotplugEvent>,
     /// IPC command receiver
     ipc_rx: Receiver<IpcCommand>,
+    /// Niri event receiver
+    niri_rx: Receiver<NiriEvent>,
     /// Configuration
     config: Config,
     /// Active event processor threads - maps KeyboardId to shutdown channel Sender
     active_processors: HashMap<KeyboardId, Sender<()>>,
+    /// Game mode senders - maps KeyboardId to game mode toggle channel Sender
+    game_mode_senders: HashMap<KeyboardId, Sender<bool>>,
+    /// Current game mode state
+    game_mode_active: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -189,6 +195,7 @@ impl Daemon {
     pub fn new() -> Result<Self> {
         let (hotplug_tx, hotplug_rx) = mpsc::channel();
         let (ipc_tx, ipc_rx) = mpsc::channel();
+        let (niri_tx, niri_rx) = mpsc::channel();
 
         // Start udev monitor in background
         start_udev_monitor(hotplug_tx);
@@ -200,6 +207,14 @@ impl Daemon {
         let config_path = Config::default_path()?;
         let config = Config::load(&config_path)?;
 
+        // Start niri monitor if auto_detect is enabled
+        if config.game_mode.auto_detect {
+            info!("Starting niri window monitor for automatic game mode detection");
+            niri::start_niri_monitor(niri_tx);
+        } else {
+            info!("Automatic game mode detection is disabled");
+        }
+
         info!("Loaded config with {} enabled keyboard(s)",
               config.enabled_keyboards.as_ref().map(|k| k.len()).unwrap_or(0));
 
@@ -207,8 +222,11 @@ impl Daemon {
             all_keyboards: HashMap::new(),
             hotplug_rx,
             ipc_rx,
+            niri_rx,
             config,
             active_processors: HashMap::new(),
+            game_mode_senders: HashMap::new(),
+            game_mode_active: false,
         })
     }
 
@@ -266,12 +284,42 @@ impl Daemon {
                 }
             }
 
+            // Check for niri window events (non-blocking)
+            match self.niri_rx.try_recv() {
+                Ok(NiriEvent::WindowFocusChanged(window_info)) => {
+                    // Determine if game mode should be active
+                    let should_enable = niri::should_enable_gamemode(&window_info);
+
+                    // Only update and broadcast if state changed
+                    if should_enable != self.game_mode_active {
+                        self.game_mode_active = should_enable;
+                        info!("Game mode {}", if should_enable { "ENABLED" } else { "DISABLED" });
+                        self.broadcast_game_mode(should_enable);
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    // No niri event
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    warn!("Niri monitor died");
+                }
+            }
+
             // Sleep briefly to avoid busy-waiting
             thread::sleep(Duration::from_millis(100));
         }
 
         info!("Daemon stopped");
         Ok(())
+    }
+
+    /// Broadcast game mode state to all active processors
+    fn broadcast_game_mode(&self, active: bool) {
+        for (id, tx) in &self.game_mode_senders {
+            if let Err(e) = tx.send(active) {
+                debug!("Failed to send game mode state to {}: {}", id, e);
+            }
+        }
     }
 
     /// Discover all connected keyboards
@@ -324,6 +372,8 @@ impl Daemon {
 
                 // Create shutdown channel
                 let (shutdown_tx, shutdown_rx) = channel();
+                // Create game mode channel
+                let (game_mode_tx, game_mode_rx) = channel();
 
                 if let Err(e) = event_processor::start_event_processor(
                     id.clone(),
@@ -331,10 +381,19 @@ impl Daemon {
                     name,
                     self.config.clone(),
                     shutdown_rx,
+                    game_mode_rx,
                 ) {
                     error!("Failed to start event processor for {}: {}", id, e);
                 } else {
                     self.active_processors.insert(id.clone(), shutdown_tx);
+                    self.game_mode_senders.insert(id.clone(), game_mode_tx);
+
+                    // Send current game mode state to newly started processor
+                    if self.game_mode_active {
+                        if let Some(tx) = self.game_mode_senders.get(&id) {
+                            let _ = tx.send(true);
+                        }
+                    }
                 }
             }
         }
@@ -363,6 +422,8 @@ impl Daemon {
                 // Send shutdown signal (ignore if thread already died)
                 let _ = shutdown_tx.send(());
             }
+            // Remove game mode sender as well
+            self.game_mode_senders.remove(&id);
         }
     }
 }

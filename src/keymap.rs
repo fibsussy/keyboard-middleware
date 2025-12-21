@@ -39,11 +39,19 @@ pub struct KeymapProcessor {
     /// All layer remaps from config
     layers: HashMap<Layer, HashMap<KeyCode, ConfigAction>>,
 
+    /// Game mode state
+    game_mode_active: bool,
+    /// Game mode remaps from config
+    game_mode_remaps: HashMap<KeyCode, ConfigAction>,
+
     /// SOCD state tracking
-    socd_w_pressed: bool,
-    socd_s_pressed: bool,
-    socd_a_pressed: bool,
-    socd_d_pressed: bool,
+    socd_w_held: bool,
+    socd_s_held: bool,
+    socd_a_held: bool,
+    socd_d_held: bool,
+    socd_last_vertical: Option<KeyCode>,
+    socd_last_horizontal: Option<KeyCode>,
+    socd_active_keys: [Option<KeyCode>; 2], // [vertical, horizontal]
     socd_mode: SocdMode,
 
     /// Password from config
@@ -68,14 +76,24 @@ impl KeymapProcessor {
             current_layer: Layer::L_BASE,
             base_remaps: config.remaps.clone(),
             layers,
-            socd_w_pressed: false,
-            socd_s_pressed: false,
-            socd_a_pressed: false,
-            socd_d_pressed: false,
+            game_mode_active: false,
+            game_mode_remaps: config.game_mode.remaps.clone(),
+            socd_w_held: false,
+            socd_s_held: false,
+            socd_a_held: false,
+            socd_d_held: false,
+            socd_last_vertical: None,
+            socd_last_horizontal: None,
+            socd_active_keys: [None; 2],
             socd_mode: config.game_mode.socd.mode,
             password: config.password.clone(),
             password_last_tap: None,
         }
+    }
+
+    /// Set game mode state
+    pub fn set_game_mode(&mut self, active: bool) {
+        self.game_mode_active = active;
     }
 
     /// Process a key event
@@ -139,10 +157,9 @@ impl KeymapProcessor {
             }
             Some(ConfigAction::Socd(key1, _key2)) => {
                 // SOCD handling
-                self.update_socd_state(key1, true);
                 actions.push(KeyAction::SocdManaged);
                 self.held_keys.insert(keycode, actions);
-                self.apply_socd_to_key(key1, true)
+                self.apply_socd_to_key_press(key1)
             }
             Some(ConfigAction::Password) => {
                 // Password typer with double-tap for Enter only
@@ -216,9 +233,8 @@ impl KeymapProcessor {
                         events.push((base_key, false));
                     }
                     KeyAction::SocdManaged => {
-                        // Update SOCD state
-                        self.update_socd_state(keycode, false);
-                        return self.apply_socd_to_key(keycode, false);
+                        // Apply SOCD release logic
+                        return self.apply_socd_to_key_release(keycode);
                     }
                 }
             }
@@ -237,7 +253,14 @@ impl KeymapProcessor {
 
     /// Look up action for a keycode on current layer
     fn lookup_action(&self, keycode: KeyCode) -> Option<ConfigAction> {
-        // Check current layer first (if not base)
+        // Check game mode first if active
+        if self.game_mode_active {
+            if let Some(action) = self.game_mode_remaps.get(&keycode) {
+                return Some(action.clone());
+            }
+        }
+
+        // Check current layer next (if not base)
         if self.current_layer != Layer::L_BASE {
             if let Some(layer_remaps) = self.layers.get(&self.current_layer) {
                 if let Some(action) = layer_remaps.get(&keycode) {
@@ -320,39 +343,117 @@ impl KeymapProcessor {
 
     // === SOCD Helpers ===
 
-    fn update_socd_state(&mut self, keycode: KeyCode, pressed: bool) {
+    /// Handle SOCD key press, returns new active keys [vertical, horizontal]
+    fn socd_handle_press(&mut self, keycode: KeyCode) -> [Option<KeyCode>; 2] {
         match keycode {
-            KeyCode::KC_W => self.socd_w_pressed = pressed,
-            KeyCode::KC_S => self.socd_s_pressed = pressed,
-            KeyCode::KC_A => self.socd_a_pressed = pressed,
-            KeyCode::KC_D => self.socd_d_pressed = pressed,
+            KeyCode::KC_W => {
+                self.socd_w_held = true;
+                self.socd_last_vertical = Some(KeyCode::KC_W);
+            }
+            KeyCode::KC_A => {
+                self.socd_a_held = true;
+                self.socd_last_horizontal = Some(KeyCode::KC_A);
+            }
+            KeyCode::KC_S => {
+                self.socd_s_held = true;
+                self.socd_last_vertical = Some(KeyCode::KC_S);
+            }
+            KeyCode::KC_D => {
+                self.socd_d_held = true;
+                self.socd_last_horizontal = Some(KeyCode::KC_D);
+            }
             _ => {}
         }
+        self.compute_socd_active_keys()
     }
 
-    fn apply_socd_to_key(&self, keycode: KeyCode, pressed: bool) -> ProcessResult {
+    /// Handle SOCD key release, returns new active keys [vertical, horizontal]
+    fn socd_handle_release(&mut self, keycode: KeyCode) -> [Option<KeyCode>; 2] {
         match keycode {
-            KeyCode::KC_W | KeyCode::KC_S => {
-                if self.socd_w_pressed && self.socd_s_pressed {
-                    match self.socd_mode {
-                        SocdMode::LastInputPriority => ProcessResult::EmitKey(keycode, pressed),
-                        SocdMode::Neutral => ProcessResult::None,
-                    }
-                } else {
-                    ProcessResult::EmitKey(keycode, pressed)
+            KeyCode::KC_W => self.socd_w_held = false,
+            KeyCode::KC_A => self.socd_a_held = false,
+            KeyCode::KC_S => self.socd_s_held = false,
+            KeyCode::KC_D => self.socd_d_held = false,
+            _ => {}
+        }
+        self.compute_socd_active_keys()
+    }
+
+    /// Compute which SOCD keys should be active based on held state
+    fn compute_socd_active_keys(&mut self) -> [Option<KeyCode>; 2] {
+        // Index 0 = vertical key, 1 = horizontal key
+
+        // Vertical resolution
+        if self.socd_w_held && !self.socd_s_held {
+            self.socd_active_keys[0] = Some(KeyCode::KC_W);
+        } else if self.socd_s_held && !self.socd_w_held {
+            self.socd_active_keys[0] = Some(KeyCode::KC_S);
+        } else if self.socd_w_held && self.socd_s_held {
+            // Both held: last input wins
+            self.socd_active_keys[0] = self.socd_last_vertical;
+        } else {
+            self.socd_active_keys[0] = None;
+        }
+
+        // Horizontal resolution
+        if self.socd_a_held && !self.socd_d_held {
+            self.socd_active_keys[1] = Some(KeyCode::KC_A);
+        } else if self.socd_d_held && !self.socd_a_held {
+            self.socd_active_keys[1] = Some(KeyCode::KC_D);
+        } else if self.socd_a_held && self.socd_d_held {
+            // Both held: last input wins
+            self.socd_active_keys[1] = self.socd_last_horizontal;
+        } else {
+            self.socd_active_keys[1] = None;
+        }
+
+        self.socd_active_keys
+    }
+
+    /// Apply SOCD key press - compute new active keys and return events to emit
+    fn apply_socd_to_key_press(&mut self, keycode: KeyCode) -> ProcessResult {
+        let old_keys = self.socd_active_keys;
+        let new_keys = self.socd_handle_press(keycode);
+        self.generate_socd_events(old_keys, new_keys)
+    }
+
+    /// Apply SOCD key release - compute new active keys and return events to emit
+    fn apply_socd_to_key_release(&mut self, keycode: KeyCode) -> ProcessResult {
+        let old_keys = self.socd_active_keys;
+        let new_keys = self.socd_handle_release(keycode);
+        self.generate_socd_events(old_keys, new_keys)
+    }
+
+    /// Generate events to transition from old_keys to new_keys
+    fn generate_socd_events(&self, old_keys: [Option<KeyCode>; 2], new_keys: [Option<KeyCode>; 2]) -> ProcessResult {
+        let mut events = Vec::new();
+
+        // Release keys that are no longer active
+        for old_key_opt in &old_keys {
+            if let Some(old_key) = old_key_opt {
+                // Check if this key is still in new_keys
+                if !new_keys.contains(&Some(*old_key)) {
+                    events.push((*old_key, false));
                 }
             }
-            KeyCode::KC_A | KeyCode::KC_D => {
-                if self.socd_a_pressed && self.socd_d_pressed {
-                    match self.socd_mode {
-                        SocdMode::LastInputPriority => ProcessResult::EmitKey(keycode, pressed),
-                        SocdMode::Neutral => ProcessResult::None,
-                    }
-                } else {
-                    ProcessResult::EmitKey(keycode, pressed)
+        }
+
+        // Press keys that are newly active
+        for new_key_opt in &new_keys {
+            if let Some(new_key) = new_key_opt {
+                // Check if this key was already active
+                if !old_keys.contains(&Some(*new_key)) {
+                    events.push((*new_key, true));
                 }
             }
-            _ => ProcessResult::EmitKey(keycode, pressed),
+        }
+
+        if events.is_empty() {
+            ProcessResult::None
+        } else if events.len() == 1 {
+            ProcessResult::EmitKey(events[0].0, events[0].1)
+        } else {
+            ProcessResult::MultipleEvents(events)
         }
     }
 }
