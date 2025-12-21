@@ -2,6 +2,7 @@ use anyhow::Result;
 
 mod daemon;
 mod keyboard_id;
+pub mod config;
 
 use daemon::Daemon;
 
