@@ -3,6 +3,7 @@ use anyhow::Result;
 mod daemon;
 mod keyboard_id;
 pub mod config;
+pub mod niri;
 
 use daemon::Daemon;
 
