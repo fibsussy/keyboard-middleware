@@ -32,6 +32,13 @@ enum Commands {
 
     /// Set or update the password for typing
     SetPassword,
+
+    /// Generate shell completions
+    Completion {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
 }
 
 fn main() -> Result<()> {
@@ -54,6 +61,9 @@ fn main() -> Result<()> {
         }
         Some(Commands::SetPassword) => {
             set_password()?;
+        }
+        Some(Commands::Completion { shell }) => {
+            generate_completion(*shell);
         }
         None => {
             // Print help when no command is given
@@ -87,9 +97,19 @@ fn print_help() {
     println!();
 }
 
+fn generate_completion(shell: clap_complete::Shell) {
+    use clap::CommandFactory;
+    use clap_complete::generate;
+    use std::io;
+
+    let mut cmd = Cli::command();
+    let bin_name = cmd.get_name().to_string();
+    generate(shell, &mut cmd, bin_name, &mut io::stdout());
+}
+
 fn set_password() -> Result<()> {
     use dialoguer::{Password, Confirm};
-    use config::Config;
+    use config::Passwords;
 
     println!();
     println!("{}", "═══════════════════════════════════════".bright_cyan());
@@ -100,12 +120,12 @@ fn set_password() -> Result<()> {
     println!("{}", "  Configure the key in your config.ron file using Action::Password".dimmed());
     println!();
 
-    // Load config
-    let config_path = Config::default_path()?;
-    let mut config = Config::load(&config_path)?;
+    // Get password file path
+    let password_path = Passwords::default_path()?;
 
     // Show current password state
-    if config.password.is_some() {
+    let current_password = Passwords::load(&password_path)?;
+    if current_password.is_some() {
         println!("  {} {}", "Current:".bright_yellow(), "Password is set".green());
         println!();
 
@@ -115,8 +135,9 @@ fn set_password() -> Result<()> {
             .interact()?;
 
         if clear {
-            config.password = None;
-            config.save(&config_path)?;
+            if password_path.exists() {
+                std::fs::remove_file(&password_path)?;
+            }
             println!();
             println!("  {} {}", "✓".bright_green().bold(), "Password cleared".green());
             println!();
@@ -140,9 +161,13 @@ fn set_password() -> Result<()> {
         return Ok(());
     }
 
-    // Save to config
-    config.password = Some(password);
-    config.save(&config_path)?;
+    // Ensure config directory exists
+    if let Some(parent) = password_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // Save to password file (plain text)
+    std::fs::write(&password_path, password)?;
 
     println!();
     println!("  {} {}", "✓".bright_green().bold(), "Password saved successfully!".green());

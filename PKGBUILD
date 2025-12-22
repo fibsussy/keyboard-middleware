@@ -1,27 +1,40 @@
-# Maintainer: Your Name <your.email@example.com>
+# Maintainer: fibsussy <noahlykins@gmail.com>
 pkgname=keyboard-middleware
 pkgver=0.1.0
 pkgrel=1
-pkgdesc="Multi-keyboard middleware with home row mods, SOCD cleaner, and game mode support"
-arch=('x86_64')
-url="https://github.com/yourusername/keyboard-middleware"
+pkgdesc="QMK-inspired keyboard middleware with home row mods, layers, SOCD, and game mode"
+arch=('x86_64' 'aarch64')
+url="https://github.com/fibsussy/keyboard-middleware"
 license=('MIT')
 depends=('systemd')
-makedepends=('cargo' 'rust')
-source=()
-sha256sums=()
+makedepends=()
+install=$pkgname.install
 
-build() {
-    cd "$startdir"
-    cargo build --release --locked
-}
+# Download precompiled binary from GitHub releases
+_arch="$CARCH"
+if [ "$_arch" = "x86_64" ]; then
+    _arch="x86_64"
+elif [ "$_arch" = "aarch64" ]; then
+    _arch="aarch64"
+fi
+
+source=(
+    "https://github.com/fibsussy/keyboard-middleware/releases/download/v${pkgver}/keyboard-middleware-linux-${_arch}.tar.gz"
+    "keyboard-middleware.service::https://raw.githubusercontent.com/fibsussy/keyboard-middleware/v${pkgver}/keyboard-middleware.service"
+    "config.example.ron::https://raw.githubusercontent.com/fibsussy/keyboard-middleware/v${pkgver}/config.example.ron"
+)
+sha256sums=('SKIP' 'SKIP' 'SKIP')  # Update with actual checksums for releases
 
 package() {
-    cd "$startdir"
-
-    # Install binary
-    install -Dm755 "target/release/$pkgname" "$pkgdir/usr/bin/$pkgname"
+    # Install precompiled binary
+    install -Dm755 "$srcdir/$pkgname" "$pkgdir/usr/bin/$pkgname"
 
     # Install systemd user service
-    install -Dm644 "$pkgname.service" "$pkgdir/usr/lib/systemd/user/$pkgname.service"
+    install -Dm644 "$srcdir/$pkgname.service" "$pkgdir/usr/lib/systemd/user/$pkgname.service"
+
+    # Install example config
+    install -Dm644 "$srcdir/config.example.ron" "$pkgdir/usr/share/doc/$pkgname/config.example.ron"
+
+    # Create config directory structure in package
+    install -dm755 "$pkgdir/etc/skel/.config/$pkgname"
 }

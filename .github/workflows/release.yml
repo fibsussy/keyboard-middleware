@@ -1,0 +1,106 @@
+name: Semantic Versioning and Release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.bump.outputs.new_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+      - name: Install cargo-bump
+        run: cargo install cargo-bump --locked
+      - name: Bump cargo version
+        id: bump
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -n "$LAST_TAG" ]; then
+            COMMITS=$(git log $LAST_TAG..HEAD --pretty=%s)
+          else
+            COMMITS=$(git log HEAD --pretty=%s)
+          fi
+          if echo "$COMMITS" | grep -q "^BREAKING CHANGE:"; then
+            cargo bump major
+          elif echo "$COMMITS" | grep -q "^feat:"; then
+            cargo bump minor
+          else
+            cargo bump patch
+          fi
+          NEW_VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "keyboard-middleware") | .version')
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          cargo check
+          git add Cargo.toml Cargo.lock
+      - name: Bump PKGBUILD version
+        run: |
+          sed -i "s/pkgver=.*/pkgver=${{ steps.bump.outputs.new_version }}/" PKGBUILD
+          git add PKGBUILD
+      - name: Commit and tag
+        run: |
+          git config user.name "GitHub Action"
+          git config user.email "action@github.com"
+          git commit -m "chore: bump version to v${{ steps.bump.outputs.new_version }}" || echo "No changes to commit"
+          git tag "v${{ steps.bump.outputs.new_version }}" -f
+          git push origin main
+          git push origin "v${{ steps.bump.outputs.new_version }}" -f
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    needs: [version]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [linux]
+        arch: [x86_64, aarch64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.version.outputs.new_version }}
+          fetch-depth: 0
+      - name: Install cross
+        run: cargo install cross --locked
+      - name: Clean build artifacts
+        run: cargo clean
+      - name: Build binary with cross
+        run: cross build --release --target ${{ matrix.arch }}-unknown-${{ matrix.os }}-gnu
+      - name: Create tarball
+        run: |
+          mv target/${{ matrix.arch }}-unknown-${{ matrix.os }}-gnu/release/keyboard-middleware keyboard-middleware
+          tar -czf keyboard-middleware-${{ matrix.os }}-${{ matrix.arch }}.tar.gz keyboard-middleware
+      - name: Generate checksum
+        run: sha256sum keyboard-middleware-${{ matrix.os }}-${{ matrix.arch }}.tar.gz > keyboard-middleware-${{ matrix.os }}-${{ matrix.arch }}.sha256
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: keyboard-middleware-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            keyboard-middleware-${{ matrix.os }}-${{ matrix.arch }}.tar.gz
+            keyboard-middleware-${{ matrix.os }}-${{ matrix.arch }}.sha256
+
+  release:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.version.outputs.new_version }}
+          files: |
+            artifacts/keyboard-middleware-linux-x86_64/keyboard-middleware-linux-x86_64.tar.gz
+            artifacts/keyboard-middleware-linux-x86_64/keyboard-middleware-linux-x86_64.sha256
+            artifacts/keyboard-middleware-linux-aarch64/keyboard-middleware-linux-aarch64.tar.gz
+            artifacts/keyboard-middleware-linux-aarch64/keyboard-middleware-linux-aarch64.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -2,7 +2,7 @@ use evdev::Key;
 use std::collections::HashMap;
 use std::time::Instant;
 
-use crate::config::{Action as ConfigAction, Config, KeyCode, Layer};
+use crate::config::{Action as ConfigAction, Config, KeyCode, Layer, Passwords};
 
 // SOCD uses last input priority mode hardcoded
 const SOCD_MODE_LAST_INPUT_PRIORITY: bool = true;
@@ -79,6 +79,12 @@ impl KeymapProcessor {
             layers.insert(*layer, layer_config.remaps.clone());
         }
 
+        // Load password from separate file
+        let password = Passwords::default_path()
+            .ok()
+            .and_then(|path| Passwords::load(&path).ok())
+            .flatten();
+
         Self {
             held_keys: HashMap::new(),
             pending_hrm: 0,
@@ -98,7 +104,7 @@ impl KeymapProcessor {
             socd_last_vertical: None,
             socd_last_horizontal: None,
             socd_active_keys: [None; 2],
-            password: config.password.clone(),
+            password,
             password_last_tap: None,
         }
     }

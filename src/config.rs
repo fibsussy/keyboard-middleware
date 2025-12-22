@@ -120,12 +120,40 @@ pub struct SettingsOverride {
     pub double_tap_window_ms: Option<u32>,
 }
 
+/// Password configuration (stored separately for security)
+pub struct Passwords;
+
+impl Passwords {
+    /// Load password from separate file (just plain text, no RON)
+    pub fn load(path: &std::path::Path) -> anyhow::Result<Option<String>> {
+        if !path.exists() {
+            return Ok(None);
+        }
+
+        let content = std::fs::read_to_string(path)?;
+        let trimmed = content.trim();
+
+        // If file is empty, treat as no password
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(trimmed.to_string()))
+    }
+
+    /// Get default password file path
+    pub fn default_path() -> anyhow::Result<std::path::PathBuf> {
+        let config_dir = dirs::config_dir()
+            .ok_or_else(|| anyhow::anyhow!("Failed to get config dir"))?;
+        Ok(config_dir.join("keyboard-middleware").join("password.txt"))
+    }
+}
+
 /// Main configuration structure
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     pub tapping_term_ms: u32,
     pub double_tap_window_ms: Option<u32>,
-    pub password: Option<String>,
     pub enabled_keyboards: Option<Vec<String>>,
     pub remaps: HashMap<KeyCode, Action>,
     pub layers: HashMap<Layer, LayerConfig>,
