@@ -1,3 +1,5 @@
+#![allow(clippy::pedantic)]
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use colored::Colorize;

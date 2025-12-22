@@ -16,8 +16,8 @@ use crate::keymap::{evdev_to_keycode, keycode_to_evdev, KeymapProcessor, Process
 
 /// Process events from a physical keyboard and output to virtual device
 /// Returns immediately after spawning thread
-/// shutdown_rx: Receiver to signal thread shutdown
-/// game_mode_rx: Receiver to signal game mode toggle
+/// `shutdown_rx`: Receiver to signal thread shutdown
+/// `game_mode_rx`: Receiver to signal game mode toggle
 pub fn start_event_processor(
     keyboard_id: KeyboardId,
     mut device: Device,
@@ -108,7 +108,7 @@ fn run_event_processor(
             Ok(events) => {
                 for ev in events {
                     // Process key events through keymap
-                    if let evdev::EventType::KEY = ev.event_type() {
+                    if ev.event_type() == evdev::EventType::KEY {
                         // Convert evdev key code to our KeyCode enum
                         if let Some(input_key) = evdev_to_keycode(Key::new(ev.code())) {
                             let pressed = ev.value() == 1; // 1 = press, 0 = release, 2 = repeat
@@ -129,7 +129,7 @@ fn run_event_processor(
                                     let output_event = InputEvent::new_now(
                                         ev.event_type(),
                                         output_evdev.code(),
-                                        if output_pressed { 1 } else { 0 },
+                                        i32::from(output_pressed),
                                     );
                                     virtual_device.emit(&[output_event])?;
                                 }
@@ -163,7 +163,7 @@ fn run_event_processor(
                                         let event = InputEvent::new_now(
                                             ev.event_type(),
                                             key_evdev.code(),
-                                            if pressed { 1 } else { 0 },
+                                            i32::from(pressed),
                                         );
                                         virtual_device.emit(&[event])?;
                                         std::thread::sleep(std::time::Duration::from_millis(2));
@@ -201,14 +201,14 @@ fn create_virtual_device(
 
     // Copy all supported keys from physical device
     if let Some(physical_keys) = physical_device.supported_keys() {
-        for key in physical_keys.iter() {
+        for key in physical_keys {
             keys.insert(key);
         }
     }
 
     // Build virtual device
     let virtual_device = VirtualDeviceBuilder::new()?
-        .name(&format!("Keyboard Middleware Virtual Keyboard ({})", keyboard_name))
+        .name(&format!("Keyboard Middleware Virtual Keyboard ({keyboard_name})"))
         .with_keys(&keys)?
         .build()?;
 
@@ -275,7 +275,7 @@ fn type_string(virtual_device: &mut VirtualDevice, text: &str, _add_enter: bool)
 }
 
 /// Convert a character to an evdev Key and whether shift is needed
-fn char_to_key(ch: char) -> (Option<Key>, bool) {
+const fn char_to_key(ch: char) -> (Option<Key>, bool) {
     match ch {
         'a' => (Some(Key::KEY_A), false),
         'b' => (Some(Key::KEY_B), false),

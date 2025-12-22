@@ -68,15 +68,6 @@ impl KeyboardId {
         Self(hardware_id)
     }
 
-    /// Get the string representation
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    /// Create from string
-    pub const fn from_string(s: String) -> Self {
-        Self(s)
-    }
 }
 
 impl std::fmt::Display for KeyboardId {

@@ -128,7 +128,7 @@ pub fn run_toggle() -> Result<()> {
             println!("  {} {}", "⚠".bright_yellow(), "Unexpected response from daemon".yellow());
         }
         Err(e) => {
-            println!("  {} {}", "⚠".bright_yellow(), format!("Daemon not running: {}", e).yellow());
+            println!("  {} {}", "⚠".bright_yellow(), format!("Daemon not running: {e}").yellow());
             println!("  {} Start it with: {}", "Tip:".bright_yellow().bold(), "systemctl --user start keyboard-middleware".dimmed());
         }
     }
@@ -137,15 +137,15 @@ pub fn run_toggle() -> Result<()> {
     println!("  {} {}", "✓".bright_green().bold(), "Configuration saved!".green());
     println!();
 
-    if !enabled_keyboards.is_empty() {
+    if enabled_keyboards.is_empty() {
+        println!("  {} {}", "⚠".bright_yellow(), "No keyboards enabled".yellow());
+    } else {
         println!("  {}", "Enabled keyboards:".bright_white());
         for id in &enabled_keyboards {
             if let Some((_, name)) = items.iter().find(|(kid, _)| kid.to_string() == *id) {
                 println!("    {} {}", "✓".bright_green(), name.green());
             }
         }
-    } else {
-        println!("  {} {}", "⚠".bright_yellow(), "No keyboards enabled".yellow());
     }
 
     println!();

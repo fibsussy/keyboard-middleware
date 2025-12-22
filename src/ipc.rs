@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
 /// IPC message from client to daemon
@@ -82,74 +82,4 @@ pub fn send_request(request: &IpcRequest) -> Result<IpcResponse> {
     let response: IpcResponse = bincode::deserialize(&response_buf)?;
 
     Ok(response)
-}
-
-/// IPC server for daemon
-pub struct IpcServer {
-    listener: UnixListener,
-}
-
-impl IpcServer {
-    pub fn new() -> Result<Self> {
-        let socket_path = get_socket_path();
-
-        // Remove existing socket if present
-        if socket_path.exists() {
-            std::fs::remove_file(&socket_path)?;
-        }
-
-        let listener = UnixListener::bind(&socket_path)
-            .context("Failed to bind IPC socket")?;
-
-        // Set socket permissions (owner only)
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&socket_path)?.permissions();
-            perms.set_mode(0o600);
-            std::fs::set_permissions(&socket_path, perms)?;
-        }
-
-        listener.set_nonblocking(true)?;
-
-        Ok(Self { listener })
-    }
-
-    /// Try to accept a connection (non-blocking)
-    pub fn try_accept(&self) -> Result<Option<(IpcRequest, UnixStream)>> {
-        match self.listener.accept() {
-            Ok((mut stream, _)) => {
-                // Read request length
-                let mut len_buf = [0u8; 4];
-                stream.read_exact(&mut len_buf)?;
-                let len = u32::from_le_bytes(len_buf) as usize;
-
-                // Read request
-                let mut request_buf = vec![0u8; len];
-                stream.read_exact(&mut request_buf)?;
-                let request: IpcRequest = bincode::deserialize(&request_buf)?;
-
-                Ok(Some((request, stream)))
-            }
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
-            Err(e) => Err(e.into()),
-        }
-    }
-
-    /// Send a response to a client
-    pub fn send_response(mut stream: UnixStream, response: &IpcResponse) -> Result<()> {
-        let encoded = bincode::serialize(response)?;
-        let len = (encoded.len() as u32).to_le_bytes();
-        stream.write_all(&len)?;
-        stream.write_all(&encoded)?;
-        stream.flush()?;
-        Ok(())
-    }
-}
-
-impl Drop for IpcServer {
-    fn drop(&mut self) {
-        let socket_path = get_socket_path();
-        let _ = std::fs::remove_file(socket_path);
-    }
 }

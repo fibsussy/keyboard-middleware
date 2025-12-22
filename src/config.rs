@@ -80,10 +80,12 @@ pub struct GameMode {
 }
 
 impl GameMode {
-    pub fn auto_detect_enabled() -> bool {
+    #[must_use] 
+    pub const fn auto_detect_enabled() -> bool {
         true
     }
 
+    #[must_use] 
     pub fn detection_methods() -> Vec<DetectionMethod> {
         vec![
             DetectionMethod::GamescopeAppId,
@@ -93,7 +95,8 @@ impl GameMode {
         ]
     }
 
-    pub fn process_tree_depth() -> u32 {
+    #[must_use] 
+    pub const fn process_tree_depth() -> u32 {
         10
     }
 }
@@ -125,6 +128,7 @@ pub struct Passwords;
 
 impl Passwords {
     /// Load password from separate file (just plain text, no RON)
+    #[allow(clippy::missing_errors_doc)]
     pub fn load(path: &std::path::Path) -> anyhow::Result<Option<String>> {
         if !path.exists() {
             return Ok(None);
@@ -142,6 +146,7 @@ impl Passwords {
     }
 
     /// Get default password file path
+    #[allow(clippy::missing_errors_doc)]
     pub fn default_path() -> anyhow::Result<std::path::PathBuf> {
         let config_dir = dirs::config_dir()
             .ok_or_else(|| anyhow::anyhow!("Failed to get config dir"))?;
@@ -150,7 +155,7 @@ impl Passwords {
 }
 
 /// Main configuration structure
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
     pub tapping_term_ms: u32,
     pub double_tap_window_ms: Option<u32>,
@@ -163,6 +168,7 @@ pub struct Config {
 
 impl Config {
     /// Load config from RON file
+    #[allow(clippy::missing_errors_doc)]
     pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(path)?;
         let config = ron::from_str(&content)?;
@@ -170,6 +176,7 @@ impl Config {
     }
 
     /// Save config to RON file
+    #[allow(clippy::missing_errors_doc)]
     pub fn save(&self, path: &std::path::Path) -> anyhow::Result<()> {
         let pretty = ron::ser::PrettyConfig::default();
         let content = ron::ser::to_string_pretty(self, pretty)?;
@@ -178,6 +185,7 @@ impl Config {
     }
 
     /// Get default config path
+    #[allow(clippy::missing_errors_doc)]
     pub fn default_path() -> anyhow::Result<std::path::PathBuf> {
         let config_dir = dirs::config_dir()
             .ok_or_else(|| anyhow::anyhow!("Failed to get config dir"))?;
@@ -185,7 +193,8 @@ impl Config {
     }
 
     /// Get effective config for a specific keyboard
-    pub fn for_keyboard(&self, keyboard_id: &str) -> Config {
+    #[must_use] 
+    pub fn for_keyboard(&self, keyboard_id: &str) -> Self {
         let mut config = self.clone();
 
         if let Some(override_cfg) = self.keyboard_overrides.get(keyboard_id) {
@@ -202,13 +211,13 @@ impl Config {
             // Apply keymap overrides
             if let Some(keymap) = &override_cfg.keymap {
                 if let Some(base) = &keymap.base_remaps {
-                    config.remaps = base.clone();
+                    config.remaps.clone_from(base);
                 }
                 if let Some(layers) = &keymap.layers {
-                    config.layers = layers.clone();
+                    config.layers.clone_from(layers);
                 }
                 if let Some(game) = &keymap.game_mode_remaps {
-                    config.game_mode.remaps = game.clone();
+                    config.game_mode.remaps.clone_from(game);
                 }
             }
         }
@@ -216,7 +225,8 @@ impl Config {
         config
     }
 
-    /// Save only enabled_keyboards field, preserving rest of file
+    /// Save only `enabled_keyboards` field, preserving rest of file
+    #[allow(clippy::missing_errors_doc)]
     pub fn save_enabled_keyboards_only(&self, path: &std::path::Path) -> anyhow::Result<()> {
         let content = std::fs::read_to_string(path)?;
         let lines: Vec<&str> = content.lines().collect();
@@ -235,7 +245,7 @@ impl Config {
                     } else {
                         new_lines.push("    enabled_keyboards: Some([".to_string());
                         for kb in keyboards {
-                            new_lines.push(format!("        \"{}\",", kb));
+                            new_lines.push(format!("        \"{kb}\","));
                         }
                         new_lines.push("    ]),".to_string());
                     }

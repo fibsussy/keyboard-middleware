@@ -4,9 +4,6 @@ use std::time::Instant;
 
 use crate::config::{Action as ConfigAction, Config, KeyCode, Layer, Passwords};
 
-// SOCD uses last input priority mode hardcoded
-const SOCD_MODE_LAST_INPUT_PRIORITY: bool = true;
-
 /// What a key press is doing (recorded on press, replayed on release)
 #[derive(Debug, Clone)]
 enum KeyAction {
@@ -30,7 +27,7 @@ enum KeyAction {
 
 /// QMK-inspired keymap processor
 pub struct KeymapProcessor {
-    /// What each physical key is currently doing (indexed by KeyCode)
+    /// What each physical key is currently doing (indexed by `KeyCode`)
     held_keys: HashMap<KeyCode, Vec<KeyAction>>,
     /// Which home row mods are pending (bit flags for efficiency)
     pending_hrm: u8,
@@ -73,6 +70,7 @@ pub struct KeymapProcessor {
 
 impl KeymapProcessor {
     /// Create a new keymap processor from config
+    #[must_use] 
     pub fn new(config: &Config) -> Self {
         let mut layers = HashMap::new();
         for (layer, layer_config) in &config.layers {
@@ -110,7 +108,7 @@ impl KeymapProcessor {
     }
 
     /// Set game mode state
-    pub fn set_game_mode(&mut self, active: bool) {
+    pub const fn set_game_mode(&mut self, active: bool) {
         self.game_mode_active = active;
     }
 
@@ -277,10 +275,9 @@ impl KeymapProcessor {
                                 // Quick tap: release hold, tap the tap_key
                                 events.push((hold_key, false));
                                 return ProcessResult::TapKeyPressRelease(tap_key);
-                            } else {
-                                // Held: just release hold
-                                events.push((hold_key, false));
                             }
+                            // Held: just release hold
+                            events.push((hold_key, false));
                         } else {
                             events.push((hold_key, false));
                         }
@@ -357,7 +354,7 @@ impl KeymapProcessor {
 
     // === Home Row Mod Helpers ===
 
-    fn is_hrm_key(&self, keycode: KeyCode) -> bool {
+    const fn is_hrm_key(&self, keycode: KeyCode) -> bool {
         matches!(
             keycode,
             KeyCode::KC_A | KeyCode::KC_S | KeyCode::KC_D | KeyCode::KC_F |
@@ -365,17 +362,17 @@ impl KeymapProcessor {
         )
     }
 
-    fn has_pending_hrm(&self) -> bool {
+    const fn has_pending_hrm(&self) -> bool {
         self.pending_hrm != 0
     }
 
-    fn set_hrm_pending(&mut self, keycode: KeyCode) {
+    const fn set_hrm_pending(&mut self, keycode: KeyCode) {
         if let Some(bit) = keycode_to_hrm_bit(keycode) {
             self.pending_hrm |= 1 << bit;
         }
     }
 
-    fn clear_hrm_pending(&mut self, keycode: KeyCode) {
+    const fn clear_hrm_pending(&mut self, keycode: KeyCode) {
         if let Some(bit) = keycode_to_hrm_bit(keycode) {
             self.pending_hrm &= !(1 << bit);
         }
@@ -409,7 +406,7 @@ impl KeymapProcessor {
     // === SOCD Helpers ===
 
     /// Handle SOCD key press, returns new active keys [vertical, horizontal]
-    fn socd_handle_press(&mut self, keycode: KeyCode) -> [Option<KeyCode>; 2] {
+    const fn socd_handle_press(&mut self, keycode: KeyCode) -> [Option<KeyCode>; 2] {
         match keycode {
             KeyCode::KC_W => {
                 self.socd_w_held = true;
@@ -433,7 +430,7 @@ impl KeymapProcessor {
     }
 
     /// Handle SOCD key release, returns new active keys [vertical, horizontal]
-    fn socd_handle_release(&mut self, keycode: KeyCode) -> [Option<KeyCode>; 2] {
+    const fn socd_handle_release(&mut self, keycode: KeyCode) -> [Option<KeyCode>; 2] {
         match keycode {
             KeyCode::KC_W => self.socd_w_held = false,
             KeyCode::KC_A => self.socd_a_held = false,
@@ -445,7 +442,7 @@ impl KeymapProcessor {
     }
 
     /// Compute which SOCD keys should be active based on held state
-    fn compute_socd_active_keys(&mut self) -> [Option<KeyCode>; 2] {
+    const fn compute_socd_active_keys(&mut self) -> [Option<KeyCode>; 2] {
         // Index 0 = vertical key, 1 = horizontal key
 
         // Vertical resolution (using last input priority)
@@ -489,7 +486,7 @@ impl KeymapProcessor {
         self.generate_socd_events(old_keys, new_keys)
     }
 
-    /// Generate events to transition from old_keys to new_keys
+    /// Generate events to transition from `old_keys` to `new_keys`
     fn generate_socd_events(&self, old_keys: [Option<KeyCode>; 2], new_keys: [Option<KeyCode>; 2]) -> ProcessResult {
         let mut events = Vec::new();
 
@@ -525,7 +522,7 @@ impl KeymapProcessor {
 
 // === HR Mod Bit Mapping ===
 
-fn keycode_to_hrm_bit(keycode: KeyCode) -> Option<u8> {
+const fn keycode_to_hrm_bit(keycode: KeyCode) -> Option<u8> {
     match keycode {
         KeyCode::KC_A => Some(0),
         KeyCode::KC_S => Some(1),
@@ -539,7 +536,7 @@ fn keycode_to_hrm_bit(keycode: KeyCode) -> Option<u8> {
     }
 }
 
-fn hrm_bit_to_keycode(bit: u8) -> Option<KeyCode> {
+const fn hrm_bit_to_keycode(bit: u8) -> Option<KeyCode> {
     match bit {
         0 => Some(KeyCode::KC_A),
         1 => Some(KeyCode::KC_S),
@@ -555,7 +552,7 @@ fn hrm_bit_to_keycode(bit: u8) -> Option<KeyCode> {
 
 // === ProcessResult ===
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProcessResult {
     /// Emit a single key event
     EmitKey(KeyCode, bool),
@@ -571,7 +568,8 @@ pub enum ProcessResult {
 
 // === evdev ↔ KeyCode Conversion ===
 
-pub fn evdev_to_keycode(key: Key) -> Option<KeyCode> {
+#[must_use] 
+pub const fn evdev_to_keycode(key: Key) -> Option<KeyCode> {
     match key {
         // Letters
         Key::KEY_A => Some(KeyCode::KC_A),
@@ -667,7 +665,8 @@ pub fn evdev_to_keycode(key: Key) -> Option<KeyCode> {
     }
 }
 
-pub fn keycode_to_evdev(keycode: KeyCode) -> Key {
+#[must_use] 
+pub const fn keycode_to_evdev(keycode: KeyCode) -> Key {
     match keycode {
         // Letters
         KeyCode::KC_A => Key::KEY_A,

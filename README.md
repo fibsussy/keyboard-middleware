@@ -47,7 +47,7 @@
 | **Community** | New project | Mature, large community | ✨ kmonad |
 | **Documentation** | Growing | Extensive | ✨ kmonad |
 | **Cross-Platform** | Linux only | Linux, Windows, macOS | ✨ kmonad |
-| **Established** | New (2024) | Mature (2018+) | ✨ kmonad |
+| **Established** | New (2025) | Mature (2018+) | ✨ kmonad |
 
 ### Why keyboard-middleware?
 

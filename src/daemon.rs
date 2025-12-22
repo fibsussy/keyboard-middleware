@@ -43,9 +43,9 @@ pub struct Daemon {
     file_watcher_rx: Receiver<Event>,
     /// Configuration
     config: Config,
-    /// Active event processor threads - maps KeyboardId to shutdown channel Sender
+    /// Active event processor threads - maps `KeyboardId` to shutdown channel Sender
     active_processors: HashMap<KeyboardId, Sender<()>>,
-    /// Game mode senders - maps KeyboardId to game mode toggle channel Sender
+    /// Game mode senders - maps `KeyboardId` to game mode toggle channel Sender
     game_mode_senders: HashMap<KeyboardId, Sender<bool>>,
     /// Current game mode state
     game_mode_active: bool,
@@ -53,6 +53,7 @@ pub struct Daemon {
 
 #[derive(Debug, Clone)]
 struct KeyboardMeta {
+    #[allow(dead_code)]
     name: String,
     device_path: Option<String>,
     connected: bool,
@@ -263,7 +264,7 @@ impl Daemon {
         }
 
         info!("Loaded config with {} enabled keyboard(s)",
-              config.enabled_keyboards.as_ref().map(|k| k.len()).unwrap_or(0));
+              config.enabled_keyboards.as_ref().map_or(0, std::vec::Vec::len));
 
         Ok(Self {
             all_keyboards: HashMap::new(),
@@ -424,7 +425,7 @@ impl Daemon {
                 error!("Keeping previous config");
 
                 // Notify user of config error
-                let error_msg = format!("Invalid config: {}", e);
+                let error_msg = format!("Invalid config: {e}");
                 let _ = std::process::Command::new("notify-send")
                     .arg("-u")
                     .arg("critical")
@@ -539,10 +540,10 @@ impl Daemon {
             .collect();
 
         for id in should_stop {
-            if !connected_ids.contains(&id) {
-                info!("Keyboard {} disconnected, stopping event processor", id);
-            } else {
+            if connected_ids.contains(&id) {
                 info!("Keyboard {} disabled, stopping event processor", id);
+            } else {
+                info!("Keyboard {} disconnected, stopping event processor", id);
             }
 
             if let Some(shutdown_tx) = self.active_processors.remove(&id) {

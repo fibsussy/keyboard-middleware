@@ -15,14 +15,13 @@ fn detect_niri_socket() -> Option<PathBuf> {
         if path.exists() {
             info!("Using NIRI_SOCKET from env: {}", socket_path);
             return Some(path);
-        } else {
-            warn!("NIRI_SOCKET env var set but file doesn't exist: {}", socket_path);
         }
+        warn!("NIRI_SOCKET env var set but file doesn't exist: {}", socket_path);
     }
 
     // Fallback: scan /run/user/{uid}/niri.*
     let uid = unsafe { libc::getuid() };
-    let runtime_dir = format!("/run/user/{}", uid);
+    let runtime_dir = format!("/run/user/{uid}");
 
     if let Ok(entries) = std::fs::read_dir(&runtime_dir) {
         for entry in entries.flatten() {
@@ -41,6 +40,7 @@ fn detect_niri_socket() -> Option<PathBuf> {
 }
 
 /// Check if Niri is available
+#[must_use] 
 pub fn is_niri_available() -> bool {
     detect_niri_socket().is_some()
 }
@@ -98,12 +98,9 @@ fn get_focused_window_info() -> WindowInfo {
 /// Returns immediately after spawning the monitor thread
 pub fn start_niri_monitor(tx: Sender<NiriEvent>) {
     // Detect socket before spawning thread
-    let socket_path = match detect_niri_socket() {
-        Some(path) => path,
-        None => {
-            error!("Cannot start niri monitor: no socket found");
-            return;
-        }
+    let socket_path = if let Some(path) = detect_niri_socket() { path } else {
+        error!("Cannot start niri monitor: no socket found");
+        return;
     };
 
     thread::spawn(move || {
@@ -230,9 +227,10 @@ fn check_process_tree(process_id: u32) -> (bool, bool) {
 /// Handle niri window change and return whether game mode should be active
 /// Checks multiple indicators:
 /// 1. App ID is "gamescope"
-/// 2. App ID starts with "steam_app_" (Steam games)
+/// 2. App ID starts with "`steam_app`_" (Steam games)
 /// 3. Process has `IS_GAME=1` environment variable
 /// 4. Process is running through gamescope, gamemode, or custom-gamescope
+#[must_use] 
 pub fn should_enable_gamemode(window_info: &WindowInfo) -> bool {
     // Check app ID first (fastest check)
     if window_info.app_id.as_deref() == Some("gamescope") {
