@@ -22,12 +22,19 @@ post_install() {
         else
             echo "    ℹ config.ron already exists, skipping (your config preserved)"
         fi
+
+        # Create .gitignore to protect password file
+        if [ ! -f "$CONFIG_DIR/.gitignore" ]; then
+            echo "password.txt" | sudo -u "$SUDO_USER" tee "$CONFIG_DIR/.gitignore" > /dev/null
+            echo "    ✓ Created .gitignore (protects password.txt from git)"
+        fi
         echo ""
     else
         echo "==> Run these commands to set up your config:"
         echo "    mkdir -p ~/.config/keyboard-middleware"
         echo "    cp /usr/share/doc/keyboard-middleware/config.example.ron ~/.config/keyboard-middleware/config.example.ron"
         echo "    cp /usr/share/doc/keyboard-middleware/config.example.ron ~/.config/keyboard-middleware/config.ron"
+        echo "    echo 'password.txt' > ~/.config/keyboard-middleware/.gitignore"
         echo ""
     fi
 
