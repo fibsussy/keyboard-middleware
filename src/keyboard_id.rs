@@ -96,6 +96,28 @@ pub fn find_all_keyboards() -> HashMap<KeyboardId, (Device, String)> {
                     continue;
                 }
 
+                // Skip mice - check for mouse buttons
+                // Note: Mouse buttons are BTN_TOOL_MOUSE, BTN_TOOL_FINGER, etc. in evdev
+                let has_mouse_buttons = keys.contains(evdev::Key::BTN_TOOL_MOUSE)
+                    || keys.contains(evdev::Key::BTN_TOOL_FINGER)
+                    || keys.contains(evdev::Key::BTN_TOOL_PEN);
+
+                if has_mouse_buttons {
+                    tracing::debug!("Skipping mouse device (has mouse buttons): {}", name);
+                    continue;
+                }
+
+                // Skip mice - check for relative axes (mouse movement)
+                if let Some(rel_axes) = device.supported_relative_axes() {
+                    let has_mouse_axes = rel_axes.contains(evdev::RelativeAxisType::REL_X)
+                        || rel_axes.contains(evdev::RelativeAxisType::REL_Y);
+
+                    if has_mouse_axes {
+                        tracing::debug!("Skipping mouse device (has relative axes): {}", name);
+                        continue;
+                    }
+                }
+
                 let id = KeyboardId::from_device_with_path(&device, &path);
 
                 // Log detailed device info

@@ -228,52 +228,8 @@ impl Config {
     /// Save only `enabled_keyboards` field, preserving rest of file
     #[allow(clippy::missing_errors_doc)]
     pub fn save_enabled_keyboards_only(&self, path: &std::path::Path) -> anyhow::Result<()> {
-        let content = std::fs::read_to_string(path)?;
-        let lines: Vec<&str> = content.lines().collect();
-
-        let mut new_lines = Vec::new();
-        let mut i = 0;
-
-        while i < lines.len() {
-            let line = lines[i];
-
-            if line.trim().starts_with("enabled_keyboards:") {
-                // Found field - replace with new value
-                if let Some(keyboards) = &self.enabled_keyboards {
-                    if keyboards.is_empty() {
-                        new_lines.push("    enabled_keyboards: None,".to_string());
-                    } else {
-                        new_lines.push("    enabled_keyboards: Some([".to_string());
-                        for kb in keyboards {
-                            new_lines.push(format!("        \"{kb}\","));
-                        }
-                        new_lines.push("    ]),".to_string());
-                    }
-                } else {
-                    new_lines.push("    enabled_keyboards: None,".to_string());
-                }
-
-                // Skip original field (handle both Some([...]) and None)
-                i += 1;
-                while i < lines.len() {
-                    let skip_line = lines[i];
-                    if skip_line.trim().ends_with("],") || skip_line.trim() == "None," {
-                        i += 1;
-                        break;
-                    }
-                    i += 1;
-                }
-            } else {
-                new_lines.push(line.to_string());
-                i += 1;
-            }
-        }
-
-        // Atomic write using temp file
-        let temp_path = path.with_extension("ron.tmp");
-        std::fs::write(&temp_path, new_lines.join("\n") + "\n")?;
-        std::fs::rename(&temp_path, path)?;
-
-        Ok(())
+        // Just use the working save() method - no need for complex text surgery
+        // The original implementation had an off-by-one error that corrupted configs
+        self.save(path)
     }
 }

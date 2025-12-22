@@ -1,5 +1,5 @@
 use evdev::Key;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use crate::config::{Action as ConfigAction, Config, KeyCode, Layer, Passwords};
@@ -52,6 +52,8 @@ pub struct KeymapProcessor {
     tapping_term_ms: u32,
     /// Overload press times for timing calculation
     overload_press_times: HashMap<KeyCode, Instant>,
+    /// Which OVERLOAD keys are pending (awaiting tap/hold decision)
+    pending_overload: HashSet<KeyCode>,
 
     /// SOCD state tracking
     socd_w_held: bool,
@@ -95,6 +97,7 @@ impl KeymapProcessor {
             game_mode_remaps: config.game_mode.remaps.clone(),
             tapping_term_ms: config.tapping_term_ms,
             overload_press_times: HashMap::new(),
+            pending_overload: HashSet::new(),
             socd_w_held: false,
             socd_s_held: false,
             socd_a_held: false,
@@ -172,7 +175,7 @@ impl KeymapProcessor {
                 ProcessResult::None
             }
             Some(ConfigAction::OVERLOAD(tap_key, hold_key)) => {
-                // Overload - simple tap/hold without permissive hold logic
+                // Overload - tap/hold with permissive hold logic
                 // Record press time
                 self.overload_press_times.insert(keycode, Instant::now());
 
@@ -183,10 +186,11 @@ impl KeymapProcessor {
                     self.held_keys.insert(keycode, actions);
                     ProcessResult::EmitKey(tap_key, true)
                 } else {
-                    // Pending - emit hold key immediately
+                    // Pending - emit nothing yet, wait for timeout or another key press
                     actions.push(KeyAction::OverloadPending { tap_key, hold_key });
                     self.held_keys.insert(keycode, actions);
-                    ProcessResult::EmitKey(hold_key, true)
+                    self.pending_overload.insert(keycode);
+                    ProcessResult::None
                 }
             }
             Some(ConfigAction::Socd(key1, _key2)) => {
@@ -216,16 +220,36 @@ impl KeymapProcessor {
                 }
             }
             None => {
-                // No remap - check if another key is pressed while HR mod pending (permissive hold)
-                if self.has_pending_hrm() && !self.is_hrm_key(keycode) {
+                // No remap - check if another key is pressed while modifiers pending (permissive hold)
+                let has_pending_mods = self.has_pending_hrm() || !self.pending_overload.is_empty();
+
+                if has_pending_mods && !self.is_hrm_key(keycode) {
+                    let mut events: Vec<(KeyCode, bool)> = Vec::new();
+
                     // Resolve all pending HRMs to hold
-                    let mod_keys = self.resolve_pending_hrms_to_hold();
+                    if self.has_pending_hrm() {
+                        let mod_keys = self.resolve_pending_hrms_to_hold();
+                        events.extend(mod_keys.into_iter().map(|k| (k, true)));
+                    }
+
+                    // Resolve all pending OVERLOAD keys to hold
+                    for &pending_key in &self.pending_overload.clone() {
+                        if let Some(held_actions) = self.held_keys.get_mut(&pending_key) {
+                            for action in held_actions {
+                                // Extract hold_key before mutating action
+                                if let KeyAction::OverloadPending { tap_key: _, hold_key } = *action {
+                                    // Resolve to hold
+                                    self.pending_overload.remove(&pending_key);
+                                    *action = KeyAction::OverloadHolding { hold_key };
+                                    events.push((hold_key, true));
+                                }
+                            }
+                        }
+                    }
 
                     // Then emit this key
                     actions.push(KeyAction::RegularKey(keycode));
                     self.held_keys.insert(keycode, actions);
-
-                    let mut events: Vec<(KeyCode, bool)> = mod_keys.into_iter().map(|k| (k, true)).collect();
                     events.push((keycode, true));
                     ProcessResult::MultipleEvents(events)
                 } else {
@@ -265,20 +289,24 @@ impl KeymapProcessor {
                         events.push((base_key, false));
                     }
                     KeyAction::OverloadPending { tap_key, hold_key } => {
+                        // Remove from pending set
+                        self.pending_overload.remove(&keycode);
+
                         // Check elapsed time to decide tap vs hold
                         if let Some(press_time) = self.overload_press_times.remove(&keycode) {
                             let elapsed = Instant::now().duration_since(press_time).as_millis() as u32;
 
                             if elapsed < self.tapping_term_ms {
-                                // Quick tap: release hold, tap the tap_key
-                                events.push((hold_key, false));
+                                // Quick tap: emit tap key press+release
                                 return ProcessResult::TapKeyPressRelease(tap_key);
                             }
-                            // Held: just release hold
+                            // Held but never resolved by permissive hold - resolve now
+                            events.push((hold_key, true));
+                            events.push((hold_key, false));
                         }
-                        events.push((hold_key, false));
                     }
                     KeyAction::OverloadHolding { hold_key } => {
+                        // Already resolved to hold by permissive hold - just release
                         events.push((hold_key, false));
                     }
                     KeyAction::SocdManaged => {
