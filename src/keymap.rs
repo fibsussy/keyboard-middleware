@@ -145,21 +145,40 @@ impl KeymapProcessor {
                     self.held_keys.insert(keycode, actions);
                     ProcessResult::EmitKey(tap_key, true)
                 } else {
-                    // Check if any other HR mod is pending
-                    if self.has_pending_hrm() {
+                    // Check if ANY modifiers are pending (HR or OVERLOAD)
+                    let has_pending = self.has_pending_hrm() || !self.pending_overload.is_empty();
+
+                    if has_pending {
+                        let mut events = Vec::new();
+
                         // Resolve all pending HRMs to hold
-                        let mod_keys = self.resolve_pending_hrms_to_hold();
-                        // Mark this one as pending too
+                        if self.has_pending_hrm() {
+                            let mod_keys = self.resolve_pending_hrms_to_hold();
+                            events.extend(mod_keys.into_iter().map(|k| (k, true)));
+                        }
+
+                        // Resolve all pending OVERLOAD keys to hold
+                        for &pending_key in &self.pending_overload.clone() {
+                            if let Some(held_actions) = self.held_keys.get_mut(&pending_key) {
+                                for action in held_actions {
+                                    if let KeyAction::OverloadPending { tap_key: _, hold_key } = *action {
+                                        self.pending_overload.remove(&pending_key);
+                                        *action = KeyAction::OverloadHolding { hold_key };
+                                        events.push((hold_key, true));
+                                    }
+                                }
+                            }
+                        }
+
+                        // Mark this HR key as pending too
                         self.set_hrm_pending(keycode);
                         actions.push(KeyAction::HomeRowModPending { tap_key, hold_key });
                         self.held_keys.insert(keycode, actions);
 
-                        // Emit all the modifiers
-                        ProcessResult::MultipleEvents(
-                            mod_keys.into_iter().map(|k| (k, true)).collect()
-                        )
+                        // Emit all the resolved modifiers
+                        ProcessResult::MultipleEvents(events)
                     } else {
-                        // First HR mod - mark as pending
+                        // First modifier - mark as pending
                         self.set_hrm_pending(keycode);
                         actions.push(KeyAction::HomeRowModPending { tap_key, hold_key });
                         self.held_keys.insert(keycode, actions);
@@ -186,11 +205,45 @@ impl KeymapProcessor {
                     self.held_keys.insert(keycode, actions);
                     ProcessResult::EmitKey(tap_key, true)
                 } else {
-                    // Pending - emit nothing yet, wait for timeout or another key press
-                    actions.push(KeyAction::OverloadPending { tap_key, hold_key });
-                    self.held_keys.insert(keycode, actions);
-                    self.pending_overload.insert(keycode);
-                    ProcessResult::None
+                    // Check if ANY modifiers are pending (HR or OVERLOAD)
+                    let has_pending = self.has_pending_hrm() || !self.pending_overload.is_empty();
+
+                    if has_pending {
+                        let mut events = Vec::new();
+
+                        // Resolve all pending HRMs to hold
+                        if self.has_pending_hrm() {
+                            let mod_keys = self.resolve_pending_hrms_to_hold();
+                            events.extend(mod_keys.into_iter().map(|k| (k, true)));
+                        }
+
+                        // Resolve all pending OVERLOAD keys to hold
+                        for &pending_key in &self.pending_overload.clone() {
+                            if let Some(held_actions) = self.held_keys.get_mut(&pending_key) {
+                                for action in held_actions {
+                                    if let KeyAction::OverloadPending { tap_key: _, hold_key } = *action {
+                                        self.pending_overload.remove(&pending_key);
+                                        *action = KeyAction::OverloadHolding { hold_key };
+                                        events.push((hold_key, true));
+                                    }
+                                }
+                            }
+                        }
+
+                        // Mark this OVERLOAD key as pending too
+                        actions.push(KeyAction::OverloadPending { tap_key, hold_key });
+                        self.held_keys.insert(keycode, actions);
+                        self.pending_overload.insert(keycode);
+
+                        // Emit all the resolved modifiers
+                        ProcessResult::MultipleEvents(events)
+                    } else {
+                        // First modifier - mark as pending
+                        actions.push(KeyAction::OverloadPending { tap_key, hold_key });
+                        self.held_keys.insert(keycode, actions);
+                        self.pending_overload.insert(keycode);
+                        ProcessResult::None
+                    }
                 }
             }
             Some(ConfigAction::Socd(key1, _key2)) => {
@@ -220,10 +273,10 @@ impl KeymapProcessor {
                 }
             }
             None => {
-                // No remap - check if another key is pressed while modifiers pending (permissive hold)
+                // No remap - check if modifiers are pending (permissive hold)
                 let has_pending_mods = self.has_pending_hrm() || !self.pending_overload.is_empty();
 
-                if has_pending_mods && !self.is_hrm_key(keycode) {
+                if has_pending_mods {
                     let mut events: Vec<(KeyCode, bool)> = Vec::new();
 
                     // Resolve all pending HRMs to hold
@@ -377,14 +430,6 @@ impl KeymapProcessor {
     }
 
     // === Home Row Mod Helpers ===
-
-    const fn is_hrm_key(&self, keycode: KeyCode) -> bool {
-        matches!(
-            keycode,
-            KeyCode::KC_A | KeyCode::KC_S | KeyCode::KC_D | KeyCode::KC_F |
-            KeyCode::KC_J | KeyCode::KC_K | KeyCode::KC_L | KeyCode::KC_SCLN
-        )
-    }
 
     const fn has_pending_hrm(&self) -> bool {
         self.pending_hrm != 0
@@ -732,11 +777,11 @@ pub const fn keycode_to_evdev(keycode: KeyCode) -> Key {
         KeyCode::KC_LCTL => Key::KEY_LEFTCTRL,
         KeyCode::KC_LSFT => Key::KEY_LEFTSHIFT,
         KeyCode::KC_LALT => Key::KEY_LEFTALT,
-        KeyCode::KC_LGUI => Key::KEY_LEFTMETA,
+        KeyCode::KC_LGUI | KeyCode::KC_LCMD => Key::KEY_LEFTMETA,  // KC_LCMD is alias
         KeyCode::KC_RCTL => Key::KEY_RIGHTCTRL,
         KeyCode::KC_RSFT => Key::KEY_RIGHTSHIFT,
         KeyCode::KC_RALT => Key::KEY_RIGHTALT,
-        KeyCode::KC_RGUI => Key::KEY_RIGHTMETA,
+        KeyCode::KC_RGUI | KeyCode::KC_RCMD => Key::KEY_RIGHTMETA,  // KC_RCMD is alias
 
         // Special keys
         KeyCode::KC_ESC => Key::KEY_ESC,

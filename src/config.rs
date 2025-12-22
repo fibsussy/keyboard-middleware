@@ -13,8 +13,8 @@ pub enum KeyCode {
     KC_1, KC_2, KC_3, KC_4, KC_5, KC_6, KC_7, KC_8, KC_9, KC_0,
 
     // Modifiers
-    KC_LCTL, KC_LSFT, KC_LALT, KC_LGUI,
-    KC_RCTL, KC_RSFT, KC_RALT, KC_RGUI,
+    KC_LCTL, KC_LSFT, KC_LALT, KC_LGUI, KC_LCMD,  // KC_LCMD is alias for KC_LGUI
+    KC_RCTL, KC_RSFT, KC_RALT, KC_RGUI, KC_RCMD,  // KC_RCMD is alias for KC_RGUI
 
     // Special keys
     KC_ESC, KC_CAPS, KC_TAB, KC_SPC, KC_ENT, KC_BSPC, KC_DEL,
