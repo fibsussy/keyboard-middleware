@@ -49,5 +49,23 @@ post_install() {
 }
 
 post_upgrade() {
-    post_install
+    echo ""
+    echo "==> Keyboard Middleware upgraded successfully!"
+    echo ""
+
+    # Only update config.example.ron, NEVER touch config.ron
+    if [ -n "$SUDO_USER" ]; then
+        USER_HOME=$(eval echo ~$SUDO_USER)
+        CONFIG_DIR="$USER_HOME/.config/keyboard-middleware"
+
+        if [ -d "$CONFIG_DIR" ]; then
+            sudo -u "$SUDO_USER" cp /usr/share/doc/keyboard-middleware/config.example.ron "$CONFIG_DIR/config.example.ron"
+            echo "==> Updated config.example.ron (your config.ron was NOT touched)"
+        fi
+    fi
+
+    echo ""
+    echo "==> If the daemon is running, restart it to apply changes:"
+    echo "    systemctl --user restart keyboard-middleware"
+    echo ""
 }
