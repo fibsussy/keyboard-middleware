@@ -82,9 +82,24 @@ if [ -f "$START_DIR/PKGBUILD" ] && [ -f "$START_DIR/Cargo.toml" ]; then
 
         echo "keyboard-middleware installed successfully via pacman (precompiled binary)"
     else
-        # Local source build - run directly in repo (no temp dir needed)
+        # Local source build - build in isolated temp directory
         echo "Building from source (using PKGBUILD)..."
-        makepkg -si
+
+        (
+            # Create atomic temp directory with guaranteed cleanup
+            TMP_DIR=$(mktemp -d -t keyboard-middleware-install.XXXXXX)
+            trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
+
+            # Copy all git-tracked files to temp
+            echo "Copying source files to temporary build directory..."
+            cd "$START_DIR"
+            git ls-files -z | xargs -0 tar cf - | (cd "$TMP_DIR" && tar xf -)
+
+            # Build and install in subshell
+            cd "$TMP_DIR"
+            makepkg -si
+        )
+
         echo "keyboard-middleware installed successfully via pacman (built from source)"
     fi
 else
