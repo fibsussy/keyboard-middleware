@@ -83,8 +83,14 @@
 
 ### One-Line Install (Arch Linux)
 
+**Build from source (default):**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/fibsussy/keyboard-middleware/main/install.sh | bash
+```
+
+**Or use precompiled binary:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/fibsussy/keyboard-middleware/main/install.sh | bash -s bin
 ```
 
 **Note:** For security, inspect the install script before running it. View it [here](https://github.com/fibsussy/keyboard-middleware/blob/main/install.sh).
