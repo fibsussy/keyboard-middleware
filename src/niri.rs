@@ -195,7 +195,7 @@ fn check_process_tree(process_id: u32) -> (bool, bool) {
             if cmd_lower.contains("gamescope") || cmd_lower.contains("custom-gamescope") {
                 has_gamescope = true;
             }
-            if cmd_lower.contains("gamemode") {
+            if cmd_lower.contains("gamemode") || cmd_lower.contains("gamemoded") {
                 has_gamemode = true;
             }
         }
