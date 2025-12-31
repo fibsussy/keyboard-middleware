@@ -28,9 +28,8 @@ source=(
 sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')  # Update with actual checksums for releases
 
 package() {
-    # Install precompiled binaries
+    # Install precompiled binary
     install -Dm755 "$srcdir/$pkgname" "$pkgdir/usr/bin/$pkgname"
-    install -Dm755 "$srcdir/$pkgname-niri" "$pkgdir/usr/bin/$pkgname-niri"
 
     # Install systemd system service (runs as root)
     install -Dm644 "$srcdir/$pkgname.service" "$pkgdir/usr/lib/systemd/system/$pkgname.service"

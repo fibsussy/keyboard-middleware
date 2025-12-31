@@ -67,8 +67,8 @@ fn get_input_number(path: &Path) -> Option<u32> {
         // Target looks like: ../../devices/.../inputX/eventY
         let target_str = target.to_string_lossy();
         for component in target_str.split('/') {
-            if component.starts_with("input") {
-                if let Ok(num) = component[5..].parse::<u32>() {
+            if let Some(stripped) = component.strip_prefix("input") {
+                if let Ok(num) = stripped.parse::<u32>() {
                     return Some(num);
                 }
             }

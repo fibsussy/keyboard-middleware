@@ -108,8 +108,6 @@ struct KeyboardMeta {
     /// All event device paths for this logical keyboard
     device_paths: Vec<String>,
     connected: bool,
-    /// Number of active event processors for this keyboard
-    active_device_count: usize,
 }
 
 /// Start file watcher for config file
@@ -659,7 +657,6 @@ impl Daemon {
                         name: logical_kb.name.clone(),
                         device_paths,
                         connected: true,
-                        active_device_count: 0,
                     },
                 );
                 info!("Discovered new keyboard: {} ({}) with {} device(s)",

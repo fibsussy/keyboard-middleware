@@ -23,9 +23,8 @@ build() {
 package() {
     cd "$startdir"
 
-    # Install compiled binaries
+    # Install compiled binary
     install -Dm755 "target/release/$pkgname" "$pkgdir/usr/bin/$pkgname"
-    install -Dm755 "target/release/$pkgname-niri" "$pkgdir/usr/bin/$pkgname-niri"
 
     # Install systemd system service (runs as root)
     install -Dm644 "$pkgname.service" "$pkgdir/usr/lib/systemd/system/$pkgname.service"

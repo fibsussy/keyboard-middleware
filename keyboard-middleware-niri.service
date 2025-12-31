@@ -6,7 +6,7 @@ Requires=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/keyboard-middleware-niri
+ExecStart=/usr/bin/keyboard-middleware niri-daemon
 Restart=on-failure
 RestartSec=5
 Environment="RUST_LOG=info"

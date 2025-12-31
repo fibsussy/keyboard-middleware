@@ -18,6 +18,8 @@ EOF_HELP
 MODE=""
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
     show_help
+elif [ "${1:-}" = "remote" ]; then
+    MODE="bin"
 elif [ "${1:-}" = "bin" ]; then
     MODE="bin"
 elif [ "${1:-}" = "local" ]; then
@@ -73,3 +75,15 @@ else
     sudo -v
     sudo pacman -U --noconfirm *.pkg.tar.zst
 fi
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "Installation complete! To enable the services:"
+echo ""
+echo "  Root daemon (required):"
+echo "    sudo systemctl enable --now keyboard-middleware.service"
+echo ""
+echo "  Niri watcher (optional, for auto game mode):"
+echo "    systemctl --user enable --now keyboard-middleware-niri.service"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
