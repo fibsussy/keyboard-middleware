@@ -32,6 +32,7 @@ struct KeyboardMeta {
 struct ProcessorHandle {
     shutdown_tx: crossbeam_channel::Sender<()>,
     game_mode_tx: mpsc::Sender<bool>,
+    save_stats_tx: mpsc::Sender<()>,
     thread_handle: Option<thread::JoinHandle<()>>,
 }
 
@@ -436,6 +437,7 @@ impl AsyncDaemon {
             // Create channels
             let (shutdown_tx, shutdown_rx) = crossbeam_channel::bounded(1);
             let (game_mode_tx, game_mode_rx) = mpsc::channel();
+            let (save_stats_tx, save_stats_rx) = mpsc::channel();
 
             // Start event processor thread
             let kbd_id_clone = kbd_id.clone();
@@ -453,8 +455,10 @@ impl AsyncDaemon {
                     device,
                     kbd_name_clone.clone(),
                     config_clone,
+                    uid,
                     shutdown_rx,
                     game_mode_rx,
+                    save_stats_rx,
                 ) {
                     error!("Event processor failed for {}: {}", kbd_name_clone, e);
                 }
@@ -469,6 +473,7 @@ impl AsyncDaemon {
                     ProcessorHandle {
                         shutdown_tx,
                         game_mode_tx: game_mode_tx.clone(),
+                        save_stats_tx: save_stats_tx.clone(),
                         thread_handle: Some(handle),
                     },
                 ),
@@ -946,6 +951,11 @@ impl AsyncDaemon {
                         }
                     }
                 }
+                IpcRequest::SaveAdaptiveStats => {
+                    info!("Save adaptive stats requested via IPC");
+                    self.save_adaptive_stats_all().await;
+                    IpcResponse::Ok
+                }
                 IpcRequest::Shutdown => {
                     info!("Shutdown requested via IPC");
                     // TODO: Implement graceful shutdown
@@ -991,6 +1001,19 @@ impl AsyncDaemon {
         // Send to all active threads
         for (_, _, handle) in self.active_processors.values() {
             let _ = handle.game_mode_tx.send(enabled);
+        }
+    }
+
+    /// Trigger adaptive stats save for all active processors
+    async fn save_adaptive_stats_all(&mut self) {
+        info!(
+            "Triggering adaptive stats save for {} active threads",
+            self.active_processors.len()
+        );
+
+        // Send save signal to all active threads
+        for (_, _, handle) in self.active_processors.values() {
+            let _ = handle.save_stats_tx.send(());
         }
     }
 

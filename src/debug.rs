@@ -65,10 +65,14 @@ pub fn run_debug() -> Result<()> {
                     config.tapping_term_ms.to_string().bright_blue()
                 );
 
-                if let Some(double_tap) = config.double_tap_window_ms {
+                if config.mt_config.double_tap_then_hold {
                     println!(
                         "  Double Tap Window: {}ms",
-                        double_tap.to_string().bright_blue()
+                        config
+                            .mt_config
+                            .double_tap_window_ms
+                            .to_string()
+                            .bright_blue()
                     );
                 }
 

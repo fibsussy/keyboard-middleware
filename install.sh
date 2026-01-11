@@ -1,6 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
+sudo -v
+
 show_help() {
     cat <<EOF_HELP
 Keyboard Middleware Installer

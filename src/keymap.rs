@@ -1,8 +1,8 @@
 use evdev::Key;
-use std::collections::{HashMap, HashSet};
-use std::time::Instant;
+use std::collections::HashMap;
 
 use crate::config::{Action as ConfigAction, Config, KeyCode, Layer};
+use crate::modtap::{MtAction, MtConfig as ModtapConfig, MtProcessor, MtResolution, RollingStats};
 
 /// What a key press is doing (recorded on press, replayed on release)
 #[derive(Debug, Clone)]
@@ -13,21 +13,14 @@ enum KeyAction {
     Modifier(KeyCode),
     /// Layer activation
     Layer(Layer),
-    /// Home row mod pending decision
-    HomeRowModPending { tap_key: KeyCode, hold_key: KeyCode },
-    /// Home row mod holding base key (double-tap-and-hold)
-    HomeRowModHoldingBase { base_key: KeyCode },
-    /// Overload pending decision
-    OverloadPending { tap_key: KeyCode, hold_key: KeyCode },
-    /// Overload holding (double-tap)
-    OverloadHolding { hold_key: KeyCode },
+    /// MT key managed by MT processor
+    MtManaged,
     /// SOCD managed key
     SocdManaged,
 }
 
-/// SOCD pair tracking
-#[derive(Debug, Clone)]
 /// SOCD group configuration
+#[derive(Debug, Clone)]
 struct SocdGroup {
     /// All keys in this SOCD group
     all_keys: Vec<KeyCode>,
@@ -42,10 +35,8 @@ pub struct KeymapProcessor {
     /// What each physical key is currently doing (indexed by `KeyCode`)
     held_keys: HashMap<KeyCode, Vec<KeyAction>>,
 
-    /// Home row mods - now generic, any key can be an HR mod
-    pending_hrm: HashSet<KeyCode>,
-    hrm_last_tap: HashMap<KeyCode, Instant>,
-    double_tap_window_ms: u32,
+    /// MT (Mod-Tap) processor
+    mt_processor: MtProcessor,
 
     /// Current active layer
     current_layer: Layer,
@@ -59,17 +50,15 @@ pub struct KeymapProcessor {
     /// Game mode remaps from config
     game_mode_remaps: HashMap<KeyCode, ConfigAction>,
 
-    /// Tapping term in ms (for OVERLOAD timing)
-    tapping_term_ms: u32,
-    /// Overload press times for timing calculation
-    overload_press_times: HashMap<KeyCode, Instant>,
-    /// Which OVERLOAD keys are pending (awaiting tap/hold decision)
-    pending_overload: HashSet<KeyCode>,
-
     /// SOCD state tracking - maps each key to its group ID
     socd_key_to_group: HashMap<KeyCode, usize>,
     /// SOCD groups by ID
     socd_groups: Vec<SocdGroup>,
+
+    /// Track ALL keyboard key statistics (100% coverage)
+    all_key_stats: HashMap<KeyCode, RollingStats>,
+    /// Track when each key was pressed (for measuring tap duration)
+    key_press_times: HashMap<KeyCode, std::time::Instant>,
 }
 
 impl KeymapProcessor {
@@ -82,7 +71,6 @@ impl KeymapProcessor {
         }
 
         // Build SOCD groups from config
-        // First, collect all SOCD definitions
         let mut socd_definitions: HashMap<KeyCode, Vec<KeyCode>> = HashMap::new();
 
         let extract_socd = |remaps: &HashMap<KeyCode, ConfigAction>,
@@ -105,7 +93,6 @@ impl KeymapProcessor {
         let mut socd_key_to_group = HashMap::new();
 
         for (this_key, opposing_keys) in socd_definitions {
-            // Build the full group: this_key + all opposing_keys
             let mut all_keys = vec![this_key];
             all_keys.extend(opposing_keys);
 
@@ -116,38 +103,163 @@ impl KeymapProcessor {
                 active_key: None,
             });
 
-            // Map each key in the group to this group ID
             for key in all_keys {
                 socd_key_to_group.insert(key, group_id);
             }
         }
 
+        // Build MT processor config
+        let mt_config = ModtapConfig {
+            tapping_term_ms: config.tapping_term_ms,
+            permissive_hold: config.mt_config.permissive_hold,
+            same_hand_roll_detection: config.mt_config.same_hand_roll_detection,
+            opposite_hand_chord_detection: config.mt_config.opposite_hand_chord_detection,
+            multi_mod_detection: config.mt_config.multi_mod_detection,
+            multi_mod_threshold: config.mt_config.multi_mod_threshold,
+            adaptive_timing: config.mt_config.adaptive_timing,
+            predictive_scoring: config.mt_config.predictive_scoring,
+            roll_detection_window_ms: config.mt_config.roll_detection_window_ms,
+            chord_detection_window_ms: config.mt_config.chord_detection_window_ms,
+            double_tap_then_hold: config.mt_config.double_tap_then_hold,
+            double_tap_window_ms: config.mt_config.double_tap_window_ms,
+            cross_hand_unwrap: config.mt_config.cross_hand_unwrap,
+            adaptive_target_margin_ms: config.mt_config.adaptive_target_margin_ms,
+        };
+
         Self {
             held_keys: HashMap::new(),
-            pending_hrm: HashSet::new(),
-            hrm_last_tap: HashMap::new(),
-            double_tap_window_ms: config.double_tap_window_ms.unwrap_or(300),
+            mt_processor: MtProcessor::new(mt_config),
             current_layer: Layer::base(),
             base_remaps: config.remaps.clone(),
             layers,
             game_mode_active: false,
             game_mode_remaps: config.game_mode.remaps.clone(),
-            tapping_term_ms: config.tapping_term_ms,
-            overload_press_times: HashMap::new(),
-            pending_overload: HashSet::new(),
             socd_key_to_group,
             socd_groups,
+            all_key_stats: HashMap::new(),
+            key_press_times: HashMap::new(),
         }
     }
 
     /// Set game mode state
-    pub const fn set_game_mode(&mut self, active: bool) {
+    pub fn set_game_mode(&mut self, active: bool) {
         self.game_mode_active = active;
+        self.mt_processor.set_game_mode(active);
     }
 
     /// Get all currently held keys (for graceful shutdown)
     pub fn get_held_keys(&self) -> Vec<KeyCode> {
         self.held_keys.keys().copied().collect()
+    }
+
+    /// Save adaptive timing stats to disk for a specific user
+    pub fn save_adaptive_stats(&self, user_id: u32) -> Result<(), std::io::Error> {
+        let home = Self::get_user_home(user_id);
+
+        // Save MT stats
+        let mt_path = std::path::PathBuf::from(format!(
+            "{}/.config/keyboard-middleware/adaptive_stats.json",
+            home
+        ));
+        self.mt_processor.save_stats(&mt_path)?;
+
+        // Save ALL key stats
+        let all_path = std::path::PathBuf::from(format!(
+            "{}/.config/keyboard-middleware/all_key_stats.json",
+            home
+        ));
+        self.save_all_key_stats(&all_path)?;
+
+        Ok(())
+    }
+
+    /// Load adaptive timing stats from disk for a specific user
+    pub fn load_adaptive_stats(&mut self, user_id: u32) -> Result<(), std::io::Error> {
+        let home = Self::get_user_home(user_id);
+
+        // Load MT stats
+        let mt_path = std::path::PathBuf::from(format!(
+            "{}/.config/keyboard-middleware/adaptive_stats.json",
+            home
+        ));
+        self.mt_processor.load_stats(&mt_path)?;
+
+        // Load ALL key stats
+        let all_path = std::path::PathBuf::from(format!(
+            "{}/.config/keyboard-middleware/all_key_stats.json",
+            home
+        ));
+        self.load_all_key_stats(&all_path)?;
+
+        Ok(())
+    }
+
+    /// Save all key stats to disk
+    fn save_all_key_stats(&self, path: &std::path::Path) -> Result<(), std::io::Error> {
+        if self.all_key_stats.is_empty() {
+            return Ok(());
+        }
+
+        let mut stats_map: std::collections::HashMap<String, RollingStats> =
+            std::collections::HashMap::new();
+        for (keycode, stats) in &self.all_key_stats {
+            let key_str = format!("{:?}", keycode).replace("KC_", "");
+            stats_map.insert(key_str, stats.clone());
+        }
+
+        let json = serde_json::to_string_pretty(&stats_map)?;
+        std::fs::write(path, json)?;
+        tracing::info!("ALL KEYS: Saved {} key stats", self.all_key_stats.len());
+        Ok(())
+    }
+
+    /// Load all key stats from disk
+    fn load_all_key_stats(&mut self, path: &std::path::Path) -> Result<(), std::io::Error> {
+        if !path.exists() {
+            return Ok(());
+        }
+
+        let json = std::fs::read_to_string(path)?;
+        let stats_map: std::collections::HashMap<String, RollingStats> =
+            serde_json::from_str(&json)?;
+
+        self.all_key_stats.clear();
+        for (key_str, stats) in stats_map {
+            let key_json = format!("\"KC_{}\"", key_str);
+            if let Ok(keycode) = serde_json::from_str::<KeyCode>(&key_json) {
+                self.all_key_stats.insert(keycode, stats);
+            }
+        }
+
+        tracing::info!("ALL KEYS: Loaded {} key stats", self.all_key_stats.len());
+        Ok(())
+    }
+
+    /// Get all key stats for display
+    pub fn get_all_key_stats(&self) -> HashMap<KeyCode, RollingStats> {
+        self.all_key_stats.clone()
+    }
+
+    /// Get home directory for a user ID
+    fn get_user_home(user_id: u32) -> String {
+        // Try to get the actual user's home directory from /etc/passwd
+        use std::process::Command;
+
+        let output = Command::new("getent")
+            .args(&["passwd", &user_id.to_string()])
+            .output();
+
+        if let Ok(output) = output {
+            if let Ok(line) = String::from_utf8(output.stdout) {
+                // Format: username:x:uid:gid:gecos:home:shell
+                if let Some(home) = line.split(':').nth(5) {
+                    return home.trim().to_string();
+                }
+            }
+        }
+
+        // Fallback to /root if we can't determine
+        "/root".to_string()
     }
 
     /// Process a key event
@@ -162,6 +274,10 @@ impl KeymapProcessor {
     fn process_key_press(&mut self, keycode: KeyCode) -> ProcessResult {
         let mut actions = Vec::new();
 
+        // Track press time for ALL keys (100% keyboard coverage)
+        self.key_press_times
+            .insert(keycode, std::time::Instant::now());
+
         // Look up action for this key
         let action = self.lookup_action(keycode);
 
@@ -170,57 +286,42 @@ impl KeymapProcessor {
                 // Simple key remap
                 actions.push(KeyAction::RegularKey(output_key));
                 self.held_keys.insert(keycode, actions);
-                ProcessResult::EmitKey(output_key, true)
-            }
-            Some(ConfigAction::HR(tap_key, hold_key)) => {
-                // Home row mod - check for double-tap first
-                if self.is_double_tap(keycode) {
-                    // Double-tap: hold the base key
-                    actions.push(KeyAction::HomeRowModHoldingBase { base_key: tap_key });
-                    self.held_keys.insert(keycode, actions);
-                    ProcessResult::EmitKey(tap_key, true)
+
+                // Notify MT processor (for permissive hold)
+                let mt_resolutions = self.mt_processor.on_other_key_press(output_key);
+                if !mt_resolutions.is_empty() {
+                    let mut events = vec![(output_key, true)];
+                    events.extend(self.apply_mt_resolutions(mt_resolutions));
+                    ProcessResult::MultipleEvents(events)
                 } else {
-                    // Check if ANY modifiers are pending (HR or OVERLOAD)
-                    let has_pending = self.has_pending_hrm() || !self.pending_overload.is_empty();
+                    ProcessResult::EmitKey(output_key, true)
+                }
+            }
+            Some(ConfigAction::MT(tap_key, hold_key)) => {
+                // MT key - first check if other MT keys need to be resolved
+                let mt_resolutions = self.mt_processor.on_other_key_press(tap_key);
 
-                    if has_pending {
-                        let mut events = Vec::new();
+                // Then register this MT key
+                if let Some(resolution) = self.mt_processor.on_press(keycode, tap_key, hold_key) {
+                    // Double-tap detected, emit the hold immediately
+                    actions.push(KeyAction::MtManaged);
+                    self.held_keys.insert(keycode, actions);
 
-                        // Resolve all pending HRMs to hold
-                        if self.has_pending_hrm() {
-                            let mod_keys = self.resolve_pending_hrms_to_hold();
-                            events.extend(mod_keys.into_iter().map(|k| (k, true)));
-                        }
-
-                        // Resolve all pending OVERLOAD keys to hold
-                        for &pending_key in &self.pending_overload.clone() {
-                            if let Some(held_actions) = self.held_keys.get_mut(&pending_key) {
-                                for action in held_actions {
-                                    if let KeyAction::OverloadPending {
-                                        tap_key: _,
-                                        hold_key,
-                                    } = *action
-                                    {
-                                        self.pending_overload.remove(&pending_key);
-                                        *action = KeyAction::OverloadHolding { hold_key };
-                                        events.push((hold_key, true));
-                                    }
-                                }
-                            }
-                        }
-
-                        // Mark this HR key as pending too
-                        self.set_hrm_pending(keycode);
-                        actions.push(KeyAction::HomeRowModPending { tap_key, hold_key });
-                        self.held_keys.insert(keycode, actions);
-
-                        // Emit all the resolved modifiers
+                    if !mt_resolutions.is_empty() {
+                        let mut events = self.apply_mt_resolutions(mt_resolutions);
+                        events.extend(self.mt_resolution_to_events(&resolution));
                         ProcessResult::MultipleEvents(events)
                     } else {
-                        // First modifier - mark as pending
-                        self.set_hrm_pending(keycode);
-                        actions.push(KeyAction::HomeRowModPending { tap_key, hold_key });
-                        self.held_keys.insert(keycode, actions);
+                        self.apply_mt_resolution_single(resolution)
+                    }
+                } else {
+                    // Normal MT processing
+                    actions.push(KeyAction::MtManaged);
+                    self.held_keys.insert(keycode, actions);
+
+                    if !mt_resolutions.is_empty() {
+                        ProcessResult::MultipleEvents(self.apply_mt_resolutions(mt_resolutions))
+                    } else {
                         ProcessResult::None
                     }
                 }
@@ -231,63 +332,6 @@ impl KeymapProcessor {
                 actions.push(KeyAction::Layer(layer));
                 self.held_keys.insert(keycode, actions);
                 ProcessResult::None
-            }
-            Some(ConfigAction::OVERLOAD(tap_key, hold_key)) => {
-                // Overload - tap/hold with permissive hold logic
-                // Record press time
-                self.overload_press_times.insert(keycode, Instant::now());
-
-                // Check for double-tap
-                if self.is_double_tap_overload(keycode) {
-                    // Double-tap: hold the base (tap) key
-                    actions.push(KeyAction::OverloadHolding { hold_key: tap_key });
-                    self.held_keys.insert(keycode, actions);
-                    ProcessResult::EmitKey(tap_key, true)
-                } else {
-                    // Check if ANY modifiers are pending (HR or OVERLOAD)
-                    let has_pending = self.has_pending_hrm() || !self.pending_overload.is_empty();
-
-                    if has_pending {
-                        let mut events = Vec::new();
-
-                        // Resolve all pending HRMs to hold
-                        if self.has_pending_hrm() {
-                            let mod_keys = self.resolve_pending_hrms_to_hold();
-                            events.extend(mod_keys.into_iter().map(|k| (k, true)));
-                        }
-
-                        // Resolve all pending OVERLOAD keys to hold
-                        for &pending_key in &self.pending_overload.clone() {
-                            if let Some(held_actions) = self.held_keys.get_mut(&pending_key) {
-                                for action in held_actions {
-                                    if let KeyAction::OverloadPending {
-                                        tap_key: _,
-                                        hold_key,
-                                    } = *action
-                                    {
-                                        self.pending_overload.remove(&pending_key);
-                                        *action = KeyAction::OverloadHolding { hold_key };
-                                        events.push((hold_key, true));
-                                    }
-                                }
-                            }
-                        }
-
-                        // Mark this OVERLOAD key as pending too
-                        actions.push(KeyAction::OverloadPending { tap_key, hold_key });
-                        self.held_keys.insert(keycode, actions);
-                        self.pending_overload.insert(keycode);
-
-                        // Emit all the resolved modifiers
-                        ProcessResult::MultipleEvents(events)
-                    } else {
-                        // First modifier - mark as pending
-                        actions.push(KeyAction::OverloadPending { tap_key, hold_key });
-                        self.held_keys.insert(keycode, actions);
-                        self.pending_overload.insert(keycode);
-                        ProcessResult::None
-                    }
-                }
             }
             Some(ConfigAction::SOCD(this_key, _opposing_keys)) => {
                 // SOCD handling
@@ -300,41 +344,16 @@ impl KeymapProcessor {
                 ProcessResult::RunCommand(command.clone())
             }
             None => {
-                // No remap - check if modifiers are pending (permissive hold)
-                let has_pending_mods = self.has_pending_hrm() || !self.pending_overload.is_empty();
+                // No remap - check if MT keys are pending (permissive hold)
+                let mt_resolutions = self.mt_processor.on_other_key_press(keycode);
 
-                if has_pending_mods {
-                    let mut events: Vec<(KeyCode, bool)> = Vec::new();
+                if !mt_resolutions.is_empty() {
+                    // MT keys resolved, emit them first then this key
+                    let mut events = self.apply_mt_resolutions(mt_resolutions);
+                    events.push((keycode, true));
 
-                    // Resolve all pending HRMs to hold
-                    if self.has_pending_hrm() {
-                        let mod_keys = self.resolve_pending_hrms_to_hold();
-                        events.extend(mod_keys.into_iter().map(|k| (k, true)));
-                    }
-
-                    // Resolve all pending OVERLOAD keys to hold
-                    for &pending_key in &self.pending_overload.clone() {
-                        if let Some(held_actions) = self.held_keys.get_mut(&pending_key) {
-                            for action in held_actions {
-                                // Extract hold_key before mutating action
-                                if let KeyAction::OverloadPending {
-                                    tap_key: _,
-                                    hold_key,
-                                } = *action
-                                {
-                                    // Resolve to hold
-                                    self.pending_overload.remove(&pending_key);
-                                    *action = KeyAction::OverloadHolding { hold_key };
-                                    events.push((hold_key, true));
-                                }
-                            }
-                        }
-                    }
-
-                    // Then emit this key
                     actions.push(KeyAction::RegularKey(keycode));
                     self.held_keys.insert(keycode, actions);
-                    events.push((keycode, true));
                     ProcessResult::MultipleEvents(events)
                 } else {
                     // Pass through unchanged
@@ -347,6 +366,22 @@ impl KeymapProcessor {
     }
 
     fn process_key_release(&mut self, keycode: KeyCode) -> ProcessResult {
+        // Track tap duration for ALL keys (100% keyboard coverage)
+        if let Some(press_time) = self.key_press_times.remove(&keycode) {
+            let duration_ms = press_time.elapsed().as_millis() as f32;
+
+            // Only record taps below threshold (not holds)
+            // This prevents survivorship bias - only successful taps are tracked
+            let threshold_ms = 130.0; // Same threshold for all keys
+            if duration_ms < threshold_ms && !self.game_mode_active {
+                let stats = self
+                    .all_key_stats
+                    .entry(keycode)
+                    .or_insert_with(|| RollingStats::new(threshold_ms));
+                stats.update_tap(duration_ms, 30.0); // Use 30ms target margin
+            }
+        }
+
         if let Some(actions) = self.held_keys.remove(&keycode) {
             let mut events = Vec::new();
 
@@ -362,40 +397,11 @@ impl KeymapProcessor {
                         // Switch back to base layer
                         self.current_layer = Layer::base();
                     }
-                    KeyAction::HomeRowModPending {
-                        tap_key,
-                        hold_key: _,
-                    } => {
-                        // Released while pending - tap it
-                        self.clear_hrm_pending(keycode);
-                        self.set_hrm_last_tap(keycode);
-                        return ProcessResult::TapKeyPressRelease(tap_key);
-                    }
-                    KeyAction::HomeRowModHoldingBase { base_key } => {
-                        // Release the base key
-                        events.push((base_key, false));
-                    }
-                    KeyAction::OverloadPending { tap_key, hold_key } => {
-                        // Remove from pending set
-                        self.pending_overload.remove(&keycode);
-
-                        // Check elapsed time to decide tap vs hold
-                        if let Some(press_time) = self.overload_press_times.remove(&keycode) {
-                            let elapsed =
-                                Instant::now().duration_since(press_time).as_millis() as u32;
-
-                            if elapsed < self.tapping_term_ms {
-                                // Quick tap: emit tap key press+release
-                                return ProcessResult::TapKeyPressRelease(tap_key);
-                            }
-                            // Held but never resolved by permissive hold - resolve now
-                            events.push((hold_key, true));
-                            events.push((hold_key, false));
+                    KeyAction::MtManaged => {
+                        // Let MT processor handle the release
+                        if let Some(resolution) = self.mt_processor.on_release(keycode) {
+                            return self.apply_mt_resolution_single(resolution);
                         }
-                    }
-                    KeyAction::OverloadHolding { hold_key } => {
-                        // Already resolved to hold by permissive hold - just release
-                        events.push((hold_key, false));
                     }
                     KeyAction::SocdManaged => {
                         // Apply SOCD release logic
@@ -438,70 +444,45 @@ impl KeymapProcessor {
         self.base_remaps.get(&keycode).cloned()
     }
 
-    /// Resolve all pending HR mods to hold, return the modifier keys
-    fn resolve_pending_hrms_to_hold(&mut self) -> Vec<KeyCode> {
-        let mut mod_keys = Vec::new();
+    /// Apply MT resolutions and return events to emit
+    fn apply_mt_resolutions(&mut self, resolutions: Vec<MtResolution>) -> Vec<(KeyCode, bool)> {
+        let mut events = Vec::new();
 
-        // Clone the pending set to avoid borrow issues
-        let pending_keys: Vec<KeyCode> = self.pending_hrm.iter().copied().collect();
+        for resolution in resolutions {
+            events.extend(self.mt_resolution_to_events(&resolution));
+        }
 
-        for keycode in pending_keys {
-            if let Some(actions) = self.held_keys.get_mut(&keycode) {
-                // Find the HomeRowModPending action and replace with Modifier
-                for action in actions.iter_mut() {
-                    if let KeyAction::HomeRowModPending { hold_key, .. } = action {
-                        mod_keys.push(*hold_key);
-                        *action = KeyAction::Modifier(*hold_key);
-                        break;
-                    }
-                }
+        events
+    }
+
+    /// Convert a single MT resolution to events
+    fn mt_resolution_to_events(&self, resolution: &MtResolution) -> Vec<(KeyCode, bool)> {
+        match resolution.action {
+            MtAction::TapPress(key) => vec![(key, true)],
+            MtAction::TapPressRelease(key) => vec![(key, true), (key, false)],
+            MtAction::HoldPress(key) => vec![(key, true)],
+            MtAction::HoldPressRelease(key) => vec![(key, true), (key, false)],
+            MtAction::ReleaseHold(key) => vec![(key, false)],
+        }
+    }
+
+    /// Apply single MT resolution
+    fn apply_mt_resolution_single(&self, resolution: MtResolution) -> ProcessResult {
+        match resolution.action {
+            MtAction::TapPress(key) => ProcessResult::EmitKey(key, true),
+            MtAction::TapPressRelease(key) => ProcessResult::TapKeyPressRelease(key),
+            MtAction::HoldPress(key) => ProcessResult::EmitKey(key, true),
+            MtAction::HoldPressRelease(key) => {
+                ProcessResult::MultipleEvents(vec![(key, true), (key, false)])
             }
-            self.clear_hrm_pending(keycode);
+            MtAction::ReleaseHold(key) => ProcessResult::EmitKey(key, false),
         }
-
-        mod_keys
     }
 
-    // === Home Row Mod Helpers ===
-
-    fn has_pending_hrm(&self) -> bool {
-        !self.pending_hrm.is_empty()
-    }
-
-    fn set_hrm_pending(&mut self, keycode: KeyCode) {
-        self.pending_hrm.insert(keycode);
-    }
-
-    fn clear_hrm_pending(&mut self, keycode: KeyCode) {
-        self.pending_hrm.remove(&keycode);
-    }
-
-    fn is_double_tap(&self, keycode: KeyCode) -> bool {
-        if let Some(last_tap) = self.hrm_last_tap.get(&keycode) {
-            let elapsed = Instant::now().duration_since(*last_tap).as_millis() as u32;
-            return elapsed < self.double_tap_window_ms;
-        }
-        false
-    }
-
-    fn set_hrm_last_tap(&mut self, keycode: KeyCode) {
-        self.hrm_last_tap.insert(keycode, Instant::now());
-    }
-
-    /// Check if this is a double-tap for OVERLOAD (hold base key)
-    fn is_double_tap_overload(&self, keycode: KeyCode) -> bool {
-        if let Some(press_time) = self.overload_press_times.get(&keycode) {
-            let elapsed = Instant::now().duration_since(*press_time).as_millis() as u32;
-            return elapsed < self.double_tap_window_ms;
-        }
-        false
-    }
-
-    // === SOCD Helpers (Generic) ===
+    // === SOCD Helpers ===
 
     /// Apply SOCD key press - uses stack-based last-input-priority
     fn apply_socd_to_key_press(&mut self, keycode: KeyCode) -> ProcessResult {
-        // Find which SOCD group this key belongs to
         if let Some(&group_id) = self.socd_key_to_group.get(&keycode) {
             let group = &mut self.socd_groups[group_id];
             let old_active = group.active_key;
@@ -524,7 +505,6 @@ impl KeymapProcessor {
 
     /// Apply SOCD key release - activates the previous key in stack
     fn apply_socd_to_key_release(&mut self, keycode: KeyCode) -> ProcessResult {
-        // Find which SOCD group this key belongs to
         if let Some(&group_id) = self.socd_key_to_group.get(&keycode) {
             let group = &mut self.socd_groups[group_id];
             let old_active = group.active_key;
@@ -551,20 +531,10 @@ impl KeymapProcessor {
     ) -> ProcessResult {
         match (old_active, new_active) {
             (None, None) => ProcessResult::None,
-            (None, Some(new_key)) => {
-                // Press new key
-                ProcessResult::EmitKey(new_key, true)
-            }
-            (Some(old_key), None) => {
-                // Release old key
-                ProcessResult::EmitKey(old_key, false)
-            }
-            (Some(old_key), Some(new_key)) if old_key == new_key => {
-                // Same key, no change
-                ProcessResult::None
-            }
+            (None, Some(new_key)) => ProcessResult::EmitKey(new_key, true),
+            (Some(old_key), None) => ProcessResult::EmitKey(old_key, false),
+            (Some(old_key), Some(new_key)) if old_key == new_key => ProcessResult::None,
             (Some(old_key), Some(new_key)) => {
-                // Transition: release old, press new
                 ProcessResult::MultipleEvents(vec![(old_key, false), (new_key, true)])
             }
         }
@@ -819,11 +789,11 @@ pub const fn keycode_to_evdev(keycode: KeyCode) -> Key {
         KeyCode::KC_LCTL => Key::KEY_LEFTCTRL,
         KeyCode::KC_LSFT => Key::KEY_LEFTSHIFT,
         KeyCode::KC_LALT => Key::KEY_LEFTALT,
-        KeyCode::KC_LGUI | KeyCode::KC_LCMD => Key::KEY_LEFTMETA, // KC_LCMD is alias
+        KeyCode::KC_LGUI | KeyCode::KC_LCMD => Key::KEY_LEFTMETA,
         KeyCode::KC_RCTL => Key::KEY_RIGHTCTRL,
         KeyCode::KC_RSFT => Key::KEY_RIGHTSHIFT,
         KeyCode::KC_RALT => Key::KEY_RIGHTALT,
-        KeyCode::KC_RGUI | KeyCode::KC_RCMD => Key::KEY_RIGHTMETA, // KC_RCMD is alias
+        KeyCode::KC_RGUI | KeyCode::KC_RCMD => Key::KEY_RIGHTMETA,
 
         // Special keys
         KeyCode::KC_ESC => Key::KEY_ESC,

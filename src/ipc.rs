@@ -23,6 +23,8 @@ pub enum IpcRequest {
     SetGameMode(bool),
     /// Reload configuration from disk
     Reload,
+    /// Force save adaptive timing stats immediately
+    SaveAdaptiveStats,
     /// Shutdown daemon
     Shutdown,
 }

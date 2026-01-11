@@ -210,10 +210,10 @@ impl Layer {
 pub enum Action {
     /// Direct key mapping
     Key(KeyCode),
-    /// Homerow mod: tap for key, hold for modifier (works on ANY key)
-    HR(KeyCode, KeyCode),
-    /// Simple overload: tap for key, hold for modifier (no permissive hold, works on ANY key)
-    OVERLOAD(KeyCode, KeyCode),
+    /// QMK-style Mod-Tap: advanced tap/hold with configurable behavior
+    /// MT(tap_key, hold_key) - Tap for tap_key, hold for hold_key
+    /// Supports: permissive hold, roll detection, chord detection, adaptive timing
+    MT(KeyCode, KeyCode),
     /// Switch to layer
     TO(Layer),
     /// SOCD (Simultaneous Opposite Cardinal Direction) - fully generic
@@ -288,14 +288,114 @@ pub struct KeymapOverride {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SettingsOverride {
     pub tapping_term_ms: Option<u32>,
-    pub double_tap_window_ms: Option<u32>,
+}
+
+/// MT (Mod-Tap) configuration
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MtConfig {
+    /// Enable permissive hold - if another key is pressed while MT is pending,
+    /// immediately resolve to hold (default: true)
+    #[serde(default = "default_true")]
+    pub permissive_hold: bool,
+
+    /// Enable same-hand roll detection - rolls on same hand favor tap (default: true)
+    #[serde(default = "default_true")]
+    pub same_hand_roll_detection: bool,
+
+    /// Enable opposite-hand chord detection - chords on opposite hands favor hold (default: true)
+    #[serde(default = "default_true")]
+    pub opposite_hand_chord_detection: bool,
+
+    /// Enable multi-mod detection - multiple modifiers held simultaneously
+    /// on same hand all promote to hold (default: true)
+    #[serde(default = "default_true")]
+    pub multi_mod_detection: bool,
+
+    /// Minimum number of MT keys held to trigger multi-mod (default: 2)
+    #[serde(default = "default_multi_mod_threshold")]
+    pub multi_mod_threshold: usize,
+
+    /// Enable adaptive timing - adjust thresholds based on user behavior (default: false)
+    #[serde(default)]
+    pub adaptive_timing: bool,
+
+    /// Enable predictive intent scoring (default: false)
+    #[serde(default)]
+    pub predictive_scoring: bool,
+
+    /// Roll detection window in ms (default: 150)
+    #[serde(default = "default_roll_window")]
+    pub roll_detection_window_ms: u32,
+
+    /// Chord detection window in ms (default: 50)
+    #[serde(default = "default_chord_window")]
+    pub chord_detection_window_ms: u32,
+
+    /// Enable double-tap-then-hold - double tap to hold the tap key until released (default: false)
+    #[serde(default)]
+    pub double_tap_then_hold: bool,
+
+    /// Window (ms) for detecting double-taps (default: 300)
+    #[serde(default = "default_double_tap_window")]
+    pub double_tap_window_ms: u32,
+
+    /// Enable cross-hand unwrap - when holding a modifier on one hand,
+    /// MT keys on the opposite hand will unwrap to their tap key (default: true)
+    /// Example: Hold ; (right hand, becomes Win), press f (left hand MT) → types 'f' not Shift
+    #[serde(default = "default_true")]
+    pub cross_hand_unwrap: bool,
+
+    /// Target margin (ms) to keep adaptive threshold above average tap duration (default: 30)
+    /// Example: If your average tap is 45ms, threshold becomes 45 + 30 = 75ms
+    #[serde(default = "default_adaptive_margin")]
+    pub adaptive_target_margin_ms: u32,
+}
+
+fn default_true() -> bool {
+    true
+}
+fn default_multi_mod_threshold() -> usize {
+    2
+}
+fn default_roll_window() -> u32 {
+    150
+}
+fn default_chord_window() -> u32 {
+    50
+}
+fn default_double_tap_window() -> u32 {
+    300
+}
+fn default_adaptive_margin() -> u32 {
+    30
+}
+
+impl Default for MtConfig {
+    fn default() -> Self {
+        Self {
+            permissive_hold: true,
+            same_hand_roll_detection: true,
+            opposite_hand_chord_detection: true,
+            multi_mod_detection: true,
+            multi_mod_threshold: 2,
+            adaptive_timing: false,
+            predictive_scoring: false,
+            roll_detection_window_ms: 150,
+            chord_detection_window_ms: 50,
+            double_tap_then_hold: false,
+            double_tap_window_ms: 300,
+            cross_hand_unwrap: true,
+            adaptive_target_margin_ms: 30,
+        }
+    }
 }
 
 /// Main configuration structure
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
     pub tapping_term_ms: u32,
-    pub double_tap_window_ms: Option<u32>,
+    #[serde(default)]
+    pub mt_config: MtConfig,
     pub enabled_keyboards: Option<Vec<String>>,
     pub remaps: HashMap<KeyCode, Action>,
     pub layers: HashMap<Layer, LayerConfig>,
@@ -339,9 +439,6 @@ impl Config {
             if let Some(settings) = &override_cfg.settings {
                 if let Some(term) = settings.tapping_term_ms {
                     config.tapping_term_ms = term;
-                }
-                if let Some(window) = settings.double_tap_window_ms {
-                    config.double_tap_window_ms = Some(window);
                 }
             }
 
@@ -536,13 +633,13 @@ impl Config {
                 self.tapping_term_ms
             ));
         }
-        if let Some(window) = self.double_tap_window_ms {
-            if window == 0 || window > 1000 {
-                errors.push(format!(
-                    "double_tap_window_ms out of reasonable range (0-1000): {}",
-                    window
-                ));
-            }
+
+        // Validate MT config timing
+        if self.mt_config.double_tap_window_ms == 0 || self.mt_config.double_tap_window_ms > 1000 {
+            errors.push(format!(
+                "mt_config.double_tap_window_ms out of reasonable range (0-1000): {}",
+                self.mt_config.double_tap_window_ms
+            ));
         }
 
         // Validation 3: Check layer references

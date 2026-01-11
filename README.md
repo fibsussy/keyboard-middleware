@@ -116,6 +116,9 @@ systemctl --user enable --now keyboard-middleware-niri.service
 (
     tapping_term_ms: 130,
     double_tap_window_ms: None,
+    hr_permissive_hold: true,
+    overload_permissive_hold: true,
+    hr_cross_hand_disable: true,
     enabled_keyboards: None,
     remaps: { /* base layer keymaps */ },
     layers: { /* additional layers */ },
@@ -123,6 +126,26 @@ systemctl --user enable --now keyboard-middleware-niri.service
     keyboard_overrides: { /* per-keyboard configs */ },
 )
 ```
+
+#### Behavior Settings
+
+- **hr_permissive_hold** (default: `true`)
+  - Enable permissive hold for HR (Home Row mods)
+  - `true`: Pressing another key while HR is held resolves it to modifier immediately
+  - `false`: HR waits for `tapping_term_ms` timeout before deciding tap vs hold
+
+- **overload_permissive_hold** (default: `true`)
+  - Enable permissive hold for OVERLOAD keys
+  - `true`: Pressing another key while OVERLOAD is held resolves it to modifier immediately
+  - `false`: OVERLOAD waits for `tapping_term_ms` timeout before deciding tap vs hold
+
+- **hr_cross_unwrap_to_tap** (default: `true`)
+  - Enable cross-hand unwrapping for HR
+  - `true`: When holding an HR modifier on left hand, HR keys on right hand emit regular keys
+  - `false`: HR keys on both hands always behave as HR modifiers
+  - Example: Hold `A` (resolved to Cmd), press `J` → emits `Cmd+J` (not `Shift+J`)
+  - Note: Applies when ANY HR is held, regardless of pending/resolved state
+  - Prevents modifier conflicts between hands
 
 ### Available Key Codes
 

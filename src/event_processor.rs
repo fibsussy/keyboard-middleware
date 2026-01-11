@@ -22,8 +22,10 @@ pub fn start_event_processor(
     mut device: Device,
     keyboard_name: String,
     config: Config,
+    user_id: u32,
     shutdown_rx: crossbeam_channel::Receiver<()>,
     game_mode_rx: std::sync::mpsc::Receiver<bool>,
+    save_stats_rx: std::sync::mpsc::Receiver<()>,
 ) -> Result<()> {
     thread::spawn(move || {
         if let Err(e) = run_event_processor(
@@ -31,8 +33,10 @@ pub fn start_event_processor(
             &mut device,
             &keyboard_name,
             &config,
+            user_id,
             shutdown_rx,
             game_mode_rx,
+            save_stats_rx,
         ) {
             error!("Event processor for {} failed: {}", keyboard_id, e);
         }
@@ -47,8 +51,10 @@ fn run_event_processor(
     device: &mut Device,
     keyboard_name: &str,
     config: &Config,
+    user_id: u32,
     shutdown_rx: crossbeam_channel::Receiver<()>,
     game_mode_rx: std::sync::mpsc::Receiver<bool>,
+    save_stats_rx: std::sync::mpsc::Receiver<()>,
 ) -> Result<()> {
     info!(
         "Starting event processor for: {} ({})",
@@ -73,12 +79,21 @@ fn run_event_processor(
     // Create keymap processor (QMK-inspired)
     let mut keymap = KeymapProcessor::new(config);
 
+    // Load adaptive timing stats from disk
+    let _ = keymap.load_adaptive_stats(user_id); // Ignore errors if file doesn't exist
+
+    // Track last save time for periodic stats saving
+    let mut last_stats_save = std::time::Instant::now();
+    const STATS_SAVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+
     // Event processing loop
     loop {
         // Check for shutdown signal (non-blocking)
         match shutdown_rx.try_recv() {
             Ok(()) => {
                 warn!("Shutdown signal received for: {}", keyboard_name);
+                // Save adaptive timing stats before shutdown
+                let _ = keymap.save_adaptive_stats(user_id);
                 // Release all held keys before exiting (graceful shutdown)
                 release_all_keys(&mut virtual_device, &keymap);
                 // Ungrab device before exiting
@@ -115,6 +130,27 @@ fn run_event_processor(
                 // Game mode channel disconnected, just log and continue
                 debug!("Game mode channel disconnected for: {}", keyboard_name);
             }
+        }
+
+        // Check for save stats request (non-blocking)
+        match save_stats_rx.try_recv() {
+            Ok(()) => {
+                info!("Save stats requested for: {}", keyboard_name);
+                let _ = keymap.save_adaptive_stats(user_id);
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                // No save request, continue
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                // Save stats channel disconnected, just log and continue
+                debug!("Save stats channel disconnected for: {}", keyboard_name);
+            }
+        }
+
+        // Periodically save adaptive timing stats
+        if last_stats_save.elapsed() >= STATS_SAVE_INTERVAL {
+            let _ = keymap.save_adaptive_stats(user_id);
+            last_stats_save = std::time::Instant::now();
         }
 
         // Read events from physical keyboard (non-blocking)
