@@ -5,6 +5,7 @@ on:
     branches: [main]
 
 jobs:
+  # Calculate version bump (don't commit yet)
   version:
     runs-on: ubuntu-latest
     outputs:
@@ -18,7 +19,7 @@ jobs:
           toolchain: stable
       - name: Install cargo-bump
         run: cargo install cargo-bump --locked
-      - name: Bump cargo version
+      - name: Calculate version bump
         id: bump
         run: |
           LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
@@ -37,23 +38,21 @@ jobs:
           NEW_VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "keyboard-middleware") | .version')
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
           cargo check
-          git add Cargo.toml Cargo.lock
       - name: Bump PKGBUILD versions
         run: |
           sed -i "s/pkgver=.*/pkgver=${{ steps.bump.outputs.new_version }}/" PKGBUILD
           sed -i "s/pkgver=.*/pkgver=${{ steps.bump.outputs.new_version }}/" PKGBUILD.bin
-          git add PKGBUILD PKGBUILD.bin
-      - name: Commit and tag
-        run: |
-          git config user.name "GitHub Action"
-          git config user.email "action@github.com"
-          git commit -m "chore: bump version to v${{ steps.bump.outputs.new_version }}" || echo "No changes to commit"
-          git tag "v${{ steps.bump.outputs.new_version }}" -f
-          git push origin main
-          git push origin "v${{ steps.bump.outputs.new_version }}" -f
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload version files (uncommitted)
+        uses: actions/upload-artifact@v4
+        with:
+          name: version-files
+          path: |
+            Cargo.toml
+            Cargo.lock
+            PKGBUILD
+            PKGBUILD.bin
 
+  # Build with bumped version (but not committed yet)
   build:
     needs: [version]
     runs-on: ubuntu-latest
@@ -64,8 +63,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: v${{ needs.version.outputs.new_version }}
           fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: version-files
+          path: .
       - name: Install cross
         run: cargo install cross --locked
       - name: Clean build artifacts
@@ -86,18 +88,42 @@ jobs:
             keyboard-middleware-${{ matrix.os }}-${{ matrix.arch }}.tar.gz
             keyboard-middleware-${{ matrix.os }}-${{ matrix.arch }}.sha256
 
-  release:
+  # Only after ALL builds succeed, commit version and create release
+  commit-and-release:
     needs: [version, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-      - name: Upload release assets
+      - name: Restore version files from successful build
+        run: |
+          cp artifacts/version-files/Cargo.toml .
+          cp artifacts/version-files/Cargo.lock .
+          cp artifacts/version-files/PKGBUILD .
+          cp artifacts/version-files/PKGBUILD.bin .
+      - name: Commit version bump and create tag
+        run: |
+          git config user.name "GitHub Action"
+          git config user.email "action@github.com"
+          git add Cargo.toml Cargo.lock PKGBUILD PKGBUILD.bin
+          git commit -m "chore: bump version to v${{ needs.version.outputs.new_version }}" || echo "No changes to commit"
+          git tag "v${{ needs.version.outputs.new_version }}" -f
+          git push origin main
+          git push origin "v${{ needs.version.outputs.new_version }}" -f
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create release with assets
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.version.outputs.new_version }}
+          name: v${{ needs.version.outputs.new_version }}
+          draft: false
+          prerelease: false
           files: |
             artifacts/keyboard-middleware-linux-x86_64/keyboard-middleware-linux-x86_64.tar.gz
             artifacts/keyboard-middleware-linux-x86_64/keyboard-middleware-linux-x86_64.sha256
