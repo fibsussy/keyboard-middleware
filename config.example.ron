@@ -28,6 +28,8 @@
     // ============================================================================
     
     mt_config: (
+        // === BASIC FEATURES ===
+        
         // Permissive hold: pressing another key while MT is pending resolves to hold
         // - true: Faster typing, key pressed during hold → immediately activates modifier
         // - false: Pure timing-based, waits for tapping_term_ms
@@ -38,40 +40,80 @@
         // - true: Typing "as" quickly will tap both, not trigger modifiers
         // - false: Disable roll detection
         // Recommended: true
-        same_hand_roll_detection: true,
+        enable_roll_detection: true,
         
         // Opposite-hand chord detection: opposite-hand chords favor hold
         // - true: Pressing keys on opposite hands simultaneously triggers modifiers
         // - false: Disable chord detection
         // Recommended: true
-        opposite_hand_chord_detection: true,
+        enable_chord_detection: true,
         
         // Multi-mod detection: multiple mods on same hand all become hold
         // - true: Pressing multiple home row mods together activates all modifiers
         // - false: Each key decides independently
         // Recommended: true
-        multi_mod_detection: true,
+        enable_multi_mod_detection: true,
         
-        // How many MT keys must be held to trigger multi-mod (usually 2)
-        multi_mod_threshold: 2,
+        // Cross-hand unwrap: holding opposite-hand mod unwraps MT keys to tap
+        // - true: Holding left Ctrl + pressing right "J" (MT J/Shift) = Ctrl+J (not Ctrl+Shift+J)
+        // - false: MT keys always behave as modifiers
+        // Recommended: true (prevents Shift+Shift and other conflicts)
+        enable_cross_hand_unwrap: true,
         
-        // Adaptive timing: learn your typing patterns and adjust thresholds
-        // - true: System learns your roll/hold speeds (experimental)
-        // - false: Use fixed tapping_term_ms
-        // Recommended: false (experimental feature)
-        adaptive_timing: false,
+        // Double-tap-hold: press twice then hold to hold the tap key
+        // - true: Double-tap Space then hold = hold Space key (not Ctrl)
+        // - false: Holding always activates modifier
+        // Recommended: true
+        enable_double_tap_hold: true,
         
-        // Predictive scoring: use context to predict tap vs hold intent
-        // - true: Analyze typing patterns to predict intent (experimental)
-        // - false: Use timing and detection rules only
-        // Recommended: false (experimental feature)
-        predictive_scoring: false,
+        // === ADAPTIVE TIMING ===
         
-        // Roll detection window (ms): keys within this window are considered a roll
-        roll_detection_window_ms: 150,
+        // Adaptive timing: learn your typing patterns and personalize thresholds per key
+        // - true: System learns your tap durations and adjusts thresholds automatically
+        // - false: Use fixed tapping_term_ms for all keys
+        // Recommended: true (stable feature, works well)
+        enable_adaptive_timing: true,
         
-        // Chord detection window (ms): keys within this window are considered a chord
-        chord_detection_window_ms: 50,
+        // Pause learning during game mode (prevents gaming input from skewing data)
+        // - true: Stop collecting tap statistics when game mode is active
+        // - false: Always collect statistics
+        // Recommended: true
+        pause_learning_in_game_mode: true,
+        
+        // === TIMING THRESHOLDS ===
+        
+        // Roll threshold (ms): keys within this window are considered a same-hand roll
+        // Lower = more strict (only very fast rolls count)
+        // Higher = more lenient (slower rolls still count)
+        // Recommended: 100ms
+        roll_threshold_ms: 100,
+        
+        // Chord threshold (ms): keys within this window are considered an opposite-hand chord
+        // Lower = more strict (only simultaneous presses count)
+        // Higher = more lenient (delayed chords still count)
+        // Recommended: 100ms
+        chord_threshold_ms: 100,
+        
+        // Target margin (ms): safety buffer added to adaptive threshold
+        // Formula: adaptive_threshold = avg_tap_duration + target_margin_ms
+        // Lower = more sensitive to holds (less margin)
+        // Higher = more sensitive to taps (more margin)
+        // Recommended: 30ms
+        target_margin_ms: 30,
+        
+        // === ADAPTIVE LEARNING PARAMETERS ===
+        
+        // Exponential moving average alpha (0.0-1.0)
+        // Lower = slower learning, more stable (~100 sample window at 0.02)
+        // Higher = faster learning, more reactive (~10 sample window at 0.2)
+        // Recommended: 0.02
+        ema_alpha: 0.02,
+        
+        // Auto-save interval (seconds): how often to save statistics to disk
+        // Lower = more frequent saves, more disk I/O
+        // Higher = less frequent saves, more data loss on crash
+        // Recommended: 30 seconds
+        auto_save_interval_secs: 30,
     ),
 
     // ============================================================================
@@ -377,6 +419,12 @@
 //     keyboard-middleware gamemode on
 //     keyboard-middleware gamemode off
 //
+// View adaptive timing statistics:
+//     keyboard-middleware adaptive-stats
+//
+// Clear adaptive timing statistics (prompts for confirmation):
+//     keyboard-middleware clear-stats
+//
 // Debug mode (show all keyboard events in real-time):
 //     keyboard-middleware debug
 //
@@ -391,13 +439,20 @@
 //   Solution: Check `keyboard-middleware list` - keyboard might not be enabled
 //
 // Problem: "MT triggers hold too fast/slow"
-//   Solution: Adjust `tapping_term_ms` (130 = balanced, 150 = slower hold)
+//   Solution 1: Enable adaptive timing (enabled by default) - system learns your patterns
+//   Solution 2: Adjust `tapping_term_ms` (130 = balanced, 150 = slower hold)
+//   Solution 3: Adjust `target_margin_ms` in mt_config (higher = more tap-sensitive)
+//   View stats: `keyboard-middleware adaptive-stats`
 //
 // Problem: "MT activates when I don't want it to"
 //   Solution: Try disabling `permissive_hold` in mt_config or increase tapping_term_ms
 //
 // Problem: "Same-hand rolls trigger modifiers"
-//   Solution: Ensure `same_hand_roll_detection: true` in mt_config
+//   Solution: Ensure `enable_roll_detection: true` in mt_config (enabled by default)
+//
+// Problem: "Adaptive timing not learning"
+//   Solution: Ensure `enable_adaptive_timing: true` in mt_config (enabled by default)
+//   Check stats: `keyboard-middleware adaptive-stats`
 //
 // Problem: "W+S both pressed in game, not moving"
 //   Solution: Use SOCD in game_mode (see example above)

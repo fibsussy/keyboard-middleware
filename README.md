@@ -5,20 +5,22 @@
 ## ✨ Features
 
 ### Core Functionality
-- **Home Row Mods (HRM)**: Tap for letters, hold for modifiers with configurable tapping term
-- **OVERLOAD Actions**: Tap/hold with permissive hold and double-tap support
+- **QMK-Style Mod-Tap (MT)**: Advanced tap/hold with permissive hold, roll detection, chord detection, adaptive timing
+- **Adaptive Timing**: Per-key personalized thresholds that learn your typing patterns
 - **Custom Layers**: Define unlimited layers (navigation, numpad, symbols, etc.)
 - **Game Mode**: Automatic detection via Steam/Gamescope with SOCD support
 - **SOCD Cleaner**: Last-input-priority for FPS games (eliminates W+S conflicts)
 - **Command Runner**: Execute arbitrary shell commands on key press
 - **Per-Keyboard Configs**: Different keymaps for different keyboards
 - **Hot-Reload**: Automatic config reload on file save with desktop notifications
+- **Full Keyboard Tracking**: Collects tap statistics for 100% of keyboard keys
 
 ### Advanced Features
 - **Zero Input Lag**: Direct evdev access with non-blocking I/O
 - **Multi-Keyboard Support**: Handle multiple keyboards simultaneously
 - **Hotplug Detection**: Automatically detect keyboard connect/disconnect
 - **Hardware-Based IDs**: Keyboards identified by USB properties, not device paths
+- **Adaptive Statistics**: View real-time typing analytics with `adaptive-stats` command
 - **Shell Completions**: Bash, Zsh, Fish support built-in
 
 ### System Integration
@@ -115,37 +117,53 @@ systemctl --user enable --now keyboard-middleware-niri.service
 ```ron
 (
     tapping_term_ms: 130,
-    double_tap_window_ms: None,
-    hr_permissive_hold: true,
-    overload_permissive_hold: true,
-    hr_cross_hand_disable: true,
     enabled_keyboards: None,
     remaps: { /* base layer keymaps */ },
     layers: { /* additional layers */ },
     game_mode: ( remaps: { /* game mode keymaps */ } ),
     keyboard_overrides: { /* per-keyboard configs */ },
+    
+    // MT configuration (all optional, shown with defaults)
+    mt_config: (
+        permissive_hold: true,
+        enable_roll_detection: true,
+        enable_chord_detection: true,
+        enable_multi_mod_detection: true,
+        enable_cross_hand_unwrap: true,
+        enable_double_tap_hold: true,
+        enable_adaptive_timing: true,
+        pause_learning_in_game_mode: true,
+        roll_threshold_ms: 100,
+        chord_threshold_ms: 100,
+        target_margin_ms: 30,
+        ema_alpha: 0.02,
+        auto_save_interval_secs: 30,
+    ),
 )
 ```
 
 #### Behavior Settings
 
-- **hr_permissive_hold** (default: `true`)
-  - Enable permissive hold for HR (Home Row mods)
-  - `true`: Pressing another key while HR is held resolves it to modifier immediately
-  - `false`: HR waits for `tapping_term_ms` timeout before deciding tap vs hold
+- **tapping_term_ms** (default: 130)
+  - Base time threshold for tap vs hold decision
+  - When adaptive timing is enabled, this serves as the initial/fallback threshold
+  - 100-130ms: More sensitive to holds
+  - 150-200ms: More sensitive to taps
 
-- **overload_permissive_hold** (default: `true`)
-  - Enable permissive hold for OVERLOAD keys
-  - `true`: Pressing another key while OVERLOAD is held resolves it to modifier immediately
-  - `false`: OVERLOAD waits for `tapping_term_ms` timeout before deciding tap vs hold
-
-- **hr_cross_unwrap_to_tap** (default: `true`)
-  - Enable cross-hand unwrapping for HR
-  - `true`: When holding an HR modifier on left hand, HR keys on right hand emit regular keys
-  - `false`: HR keys on both hands always behave as HR modifiers
-  - Example: Hold `A` (resolved to Cmd), press `J` → emits `Cmd+J` (not `Shift+J`)
-  - Note: Applies when ANY HR is held, regardless of pending/resolved state
-  - Prevents modifier conflicts between hands
+- **mt_config** - Configuration for Mod-Tap (MT) keys
+  - **permissive_hold** (default: true): When another key is pressed while MT is held, resolve immediately to hold
+  - **enable_roll_detection** (default: true): Fast same-hand rolls favor tap (prevents accidental holds during typing)
+  - **enable_chord_detection** (default: true): Opposite-hand chords favor hold (e.g., Ctrl+C with home row mods)
+  - **enable_multi_mod_detection** (default: true): Multiple mods on same hand promote to hold
+  - **enable_cross_hand_unwrap** (default: true): Holding opposite-hand mod unwraps MT keys to tap (prevents Shift+Shift)
+  - **enable_double_tap_hold** (default: true): Double-tap then hold to hold the tap key instead of modifier
+  - **enable_adaptive_timing** (default: true): Learn per-key personalized thresholds from your typing patterns
+  - **pause_learning_in_game_mode** (default: true): Disable adaptive learning when game mode is active
+  - **roll_threshold_ms** (default: 100): Max time between keys to count as roll
+  - **chord_threshold_ms** (default: 100): Max time between keys to count as chord
+  - **target_margin_ms** (default: 30): Safety margin added to average tap duration for adaptive threshold
+  - **ema_alpha** (default: 0.02): Exponential moving average smoothing factor (~100 sample window)
+  - **auto_save_interval_secs** (default: 30): How often to save adaptive statistics to disk
 
 ### Available Key Codes
 
@@ -164,28 +182,38 @@ Direct key mapping.
 KC_CAPS: Key(KC_ESC),  // Caps Lock becomes Escape
 ```
 
-#### HR(tap_key, hold_key)
-Home row mod with permissive hold logic.
-```ron
-KC_A: HR(KC_A, KC_LGUI),  // A = tap 'a', hold for Super/Win/Cmd
-KC_S: HR(KC_S, KC_LALT),   // S = tap 's', hold for Alt
-```
-
-#### OVERLOAD(tap_key, hold_key)
-Tap/hold with permissive hold and optional double-tap mode.
-- **Tap**: Emits tap_key (base key)
-- **Hold**: Emits hold_key (modifier)
-- **Permissive Hold**: Pressing another key while pending resolves to hold
-- **Double-Tap** (if `double_tap_window_ms` set): Press twice to hold tap_key instead of hold_key
+#### MT(tap_key, hold_key)
+QMK-style Mod-Tap with advanced features:
+- **Tap**: Quick press emits tap_key (base key)
+- **Hold**: Long press emits hold_key (modifier)
+- **Permissive Hold**: Pressing another key while MT is held resolves immediately to hold
+- **Roll Detection**: Fast same-hand rolls favor tap (prevents accidental holds during typing)
+- **Chord Detection**: Opposite-hand chords favor hold (e.g., Ctrl+C with home row mods)
+- **Cross-Hand Unwrap**: Holding opposite-hand mod unwraps MT keys to tap (prevents Shift+Shift conflicts)
+- **Double-Tap-Hold**: Press twice quickly then hold to hold the tap key instead of modifier
+- **Adaptive Timing**: Learns per-key personalized thresholds from your typing patterns
 
 ```ron
-KC_SPC: OVERLOAD(KC_SPC, KC_LCTL),  // Tap for Space, hold for Ctrl
+// Home row mods - left hand
+KC_A: MT(KC_A, KC_LGUI),  // Tap 'a', hold for Super/Win/Cmd
+KC_S: MT(KC_S, KC_LALT),  // Tap 's', hold for Alt
+KC_D: MT(KC_D, KC_LCTL),  // Tap 'd', hold for Ctrl
+KC_F: MT(KC_F, KC_LSFT),  // Tap 'f', hold for Shift
 
-# With double-tap enabled:
-# Press Space = tap Space
-# Hold Space = hold Ctrl (with permissive hold)
-# Double-tap Space = hold Space (base key)
+// Space/Control overload
+KC_SPC: MT(KC_SPC, KC_LCTL),  // Tap Space, hold Ctrl
+
+// Examples of MT behavior:
+// - Quick press A = 'a'
+// - Hold A (130ms+) = Super/Cmd held
+// - Hold A + press J = Super+J (permissive hold)
+// - Type "as" quickly (roll) = "as" (not Alt+s)
+// - A on left + J on right quickly = 'a' then 'j' (chord detection)
+// - Hold D (Ctrl) + press A = Ctrl+A (cross-hand unwrap prevents Cmd+A)
+// - Double-tap-hold SPC = hold Space key (not Ctrl)
 ```
+
+All MT features are configurable via `mt_config` (see Behavior Settings section).
 
 #### TO(Layer)
 Switch to a different layer while held.
@@ -213,7 +241,6 @@ KC_F2: CMD("/usr/bin/playerctl play-pause"),
 ```ron
 (
     tapping_term_ms: 130,
-    double_tap_window_ms: None,
     enabled_keyboards: None,
 
     remaps: {
@@ -222,16 +249,16 @@ KC_F2: CMD("/usr/bin/playerctl play-pause"),
         KC_ESC: Key(KC_GRV),
 
         // Home row mods - left hand
-        KC_A: HR(KC_A, KC_LGUI),
-        KC_S: HR(KC_S, KC_LALT),
-        KC_D: HR(KC_D, KC_LCTL),
-        KC_F: HR(KC_F, KC_LSFT),
+        KC_A: MT(KC_A, KC_LGUI),
+        KC_S: MT(KC_S, KC_LALT),
+        KC_D: MT(KC_D, KC_LCTL),
+        KC_F: MT(KC_F, KC_LSFT),
 
         // Home row mods - right hand
-        KC_J: HR(KC_J, KC_RSFT),
-        KC_K: HR(KC_K, KC_RCTL),
-        KC_L: HR(KC_L, KC_RALT),
-        KC_SCLN: HR(KC_SCLN, KC_RGUI),
+        KC_J: MT(KC_J, KC_RSFT),
+        KC_K: MT(KC_K, KC_RCTL),
+        KC_L: MT(KC_L, KC_RALT),
+        KC_SCLN: MT(KC_SCLN, KC_RGUI),
     },
 
     layers: {},
@@ -240,12 +267,11 @@ KC_F2: CMD("/usr/bin/playerctl play-pause"),
 )
 ```
 
-#### Advanced Config (Layers + Game Mode)
+#### Advanced Config (Layers + Game Mode + Custom MT Timing)
 
 ```ron
 (
     tapping_term_ms: 130,
-    double_tap_window_ms: Some(300),
     enabled_keyboards: Some([
         "2e3c:c365:0110:0003",
     ]),
@@ -255,14 +281,14 @@ KC_F2: CMD("/usr/bin/playerctl play-pause"),
         KC_ESC: Key(KC_GRV),
         KC_LALT: TO("nav"),
 
-        KC_A: HR(KC_A, KC_LGUI),
-        KC_S: HR(KC_S, KC_LALT),
-        KC_D: HR(KC_D, KC_LCTL),
-        KC_F: HR(KC_F, KC_LSFT),
-        KC_J: HR(KC_J, KC_RSFT),
-        KC_K: HR(KC_K, KC_RCTL),
-        KC_L: HR(KC_L, KC_RALT),
-        KC_SCLN: HR(KC_SCLN, KC_RGUI),
+        KC_A: MT(KC_A, KC_LGUI),
+        KC_S: MT(KC_S, KC_LALT),
+        KC_D: MT(KC_D, KC_LCTL),
+        KC_F: MT(KC_F, KC_LSFT),
+        KC_J: MT(KC_J, KC_RSFT),
+        KC_K: MT(KC_K, KC_RCTL),
+        KC_L: MT(KC_L, KC_RALT),
+        KC_SCLN: MT(KC_SCLN, KC_RGUI),
     },
 
     layers: {
@@ -297,15 +323,38 @@ KC_F2: CMD("/usr/bin/playerctl play-pause"),
     ),
 
     keyboard_overrides: {},
+
+    // Optional: Customize MT behavior
+    mt_config: (
+        permissive_hold: true,
+        enable_roll_detection: true,
+        enable_chord_detection: true,
+        enable_adaptive_timing: true,
+        target_margin_ms: 40,  // More conservative margin (default: 30)
+        ema_alpha: 0.01,       // Slower learning (default: 0.02)
+    ),
 )
 ```
 
 ### Timing Configuration
 
-- **tapping_term_ms**: Time to hold before tap becomes hold (130-200ms recommended)
-- **double_tap_window_ms**: Window for detecting double-taps (None or Some(300))
+- **tapping_term_ms**: Base time threshold for tap vs hold (130-200ms recommended)
+  - When adaptive timing is enabled, this serves as the initial/fallback threshold
+  - Lower value = more sensitive to holds, higher = more sensitive to taps
+  - Recommended: 130ms for mechanical keyboards, 150-180ms for laptops
 
-Lower tapping term = more sensitive to holds, higher = more sensitive to taps.
+### Adaptive Timing
+
+The MT system can learn your typing patterns and personalize thresholds per key:
+- **How it works**: Records tap durations when keys resolve to TAP (below threshold)
+- **Formula**: `adaptive_threshold = average_tap_duration + target_margin_ms`
+- **Tracks all keys**: Collects statistics for 100% of keyboard (A-Z, numbers, F-keys, etc.)
+- **Exponential moving average**: Uses α=0.02 (~100 sample window) for smooth adaptation
+- **Starts immediately**: Begins learning after first tap (no minimum sample requirement)
+- **Game mode aware**: Pauses learning during games to avoid skewing data
+
+View statistics: `keyboard-middleware adaptive-stats`
+Clear statistics: `keyboard-middleware clear-stats`
 
 ### Game Mode Detection
 
@@ -352,6 +401,12 @@ keyboard-middleware reload
 # Toggle game mode manually
 keyboard-middleware gamemode on
 keyboard-middleware gamemode off
+
+# View adaptive timing statistics
+keyboard-middleware adaptive-stats
+
+# Clear adaptive timing statistics (prompts for confirmation)
+keyboard-middleware clear-stats
 
 # Debug mode (show all keyboard events in real-time)
 keyboard-middleware debug
@@ -409,12 +464,23 @@ systemctl status keyboard-middleware
 
 Check file watcher is working (should see "Config reloaded" in logs when you save).
 
-### "HRM triggers hold too fast/slow"
+### "MT keys trigger hold too fast/slow"
 
-Adjust `tapping_term_ms`:
+**Option 1: Adjust base threshold**
 - **100-130ms**: More sensitive to holds
 - **150-200ms**: More sensitive to taps
-- **Recommended**: 130 for home row mods, 150+ for laptops
+- **Recommended**: 130ms for mechanical keyboards, 150-180ms for laptops
+
+**Option 2: Enable adaptive timing** (recommended)
+- Set `mt_config.enable_adaptive_timing: true` (enabled by default)
+- The system learns your typing patterns and personalizes thresholds per key
+- View statistics: `keyboard-middleware adaptive-stats`
+- Increase safety margin: `mt_config.target_margin_ms: 40` (default: 30)
+
+**Option 3: Adjust detection features**
+- Disable roll detection: `mt_config.enable_roll_detection: false`
+- Disable chord detection: `mt_config.enable_chord_detection: false`
+- Disable permissive hold: `mt_config.permissive_hold: false`
 
 ### "W+S both pressed in game, not moving"
 
