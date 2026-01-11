@@ -96,17 +96,112 @@ pub enum KeyCode {
     KC_F10,
     KC_F11,
     KC_F12,
+    KC_F13,
+    KC_F14,
+    KC_F15,
+    KC_F16,
+    KC_F17,
+    KC_F18,
+    KC_F19,
+    KC_F20,
+    KC_F21,
+    KC_F22,
+    KC_F23,
+    KC_F24,
+
+    // Navigation keys
+    KC_PGUP,
+    KC_PGDN,
+    KC_HOME,
+    KC_END,
+    KC_INS,
+    KC_PSCR,
+
+    // Numpad keys
+    KC_KP_0,
+    KC_KP_1,
+    KC_KP_2,
+    KC_KP_3,
+    KC_KP_4,
+    KC_KP_5,
+    KC_KP_6,
+    KC_KP_7,
+    KC_KP_8,
+    KC_KP_9,
+    KC_KP_SLASH,
+    KC_KP_ASTERISK,
+    KC_KP_MINUS,
+    KC_KP_PLUS,
+    KC_KP_ENTER,
+    KC_KP_DOT,
+    KC_NUM_LOCK,
+
+    // Media keys
+    KC_MUTE,
+    KC_VOL_UP,
+    KC_VOL_DN,
+    KC_MEDIA_PLAY_PAUSE,
+    KC_MEDIA_STOP,
+    KC_MEDIA_NEXT_TRACK,
+    KC_MEDIA_PREV_TRACK,
+    KC_MEDIA_SELECT,
+
+    // System keys
+    KC_PWR,
+    KC_SLEP,
+    KC_WAKE,
+    KC_CALC,
+    KC_MY_COMP,
+    KC_WWW_SEARCH,
+    KC_WWW_HOME,
+    KC_WWW_BACK,
+    KC_WWW_FORWARD,
+    KC_WWW_STOP,
+    KC_WWW_REFRESH,
+    KC_WWW_FAVORITES,
+
+    // Locking keys
+    KC_SCRL,
+    KC_PAUS,
+
+    // Application keys
+    KC_APP,
+    KC_MENU,
+
+    // Multimedia keys
+    KC_BRIU,
+    KC_BRID,
+    KC_DISPLAY_OFF,
+    KC_WLAN,
+    KC_BLUETOOTH,
+    KC_KEYBOARD_LAYOUT,
+
+    // International keys
+    KC_INTL_BACKSLASH,
+    KC_INTL_YEN,
+    KC_INTL_RO,
 }
 
-/// Layer identifier - supports unlimited layers
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[allow(non_camel_case_types)]
-pub enum Layer {
-    L_BASE,
-    L_NAV,
-    L_NUM,
-    L_SYM,
-    L_FN,
+/// Layer identifier - fully generic string-based layers
+/// "base" and "game_mode" are reserved layer names
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Layer(pub String);
+
+impl Layer {
+    /// Base layer (always exists)
+    pub fn base() -> Self {
+        Layer("base".to_string())
+    }
+
+    /// Check if this is the base layer
+    pub fn is_base(&self) -> bool {
+        self.0 == "base"
+    }
+
+    /// Create a new layer from string
+    pub fn new(name: impl Into<String>) -> Self {
+        Layer(name.into())
+    }
 }
 
 /// Key action - what happens when a key is pressed
@@ -114,16 +209,23 @@ pub enum Layer {
 pub enum Action {
     /// Direct key mapping
     Key(KeyCode),
-    /// Homerow mod: tap for key, hold for modifier
+    /// Homerow mod: tap for key, hold for modifier (works on ANY key)
     HR(KeyCode, KeyCode),
-    /// Simple overload: tap for key, hold for modifier (no permissive hold)
+    /// Simple overload: tap for key, hold for modifier (no permissive hold, works on ANY key)
     OVERLOAD(KeyCode, KeyCode),
     /// Switch to layer
     TO(Layer),
-    /// SOCD (Simultaneous Opposite Cardinal Direction) - for gaming
-    Socd(KeyCode, KeyCode),
-    /// Type password (double-tap to add Enter)
-    Password,
+    /// SOCD (Simultaneous Opposite Cardinal Direction) - fully generic
+    /// Format: Socd { this_key, opposing_key }
+    /// Example: Socd { this_key: KC_W, opposing_key: KC_S }
+    Socd {
+        this_key: KeyCode,
+        opposing_key: KeyCode,
+    },
+    /// Type password from file (parameter is the identifier for the password file)
+    /// File path: ~/.config/keyboard-middleware/password_{id}.txt
+    /// Use Password("default") for ~/.config/keyboard-middleware/password_default.txt
+    Password(String),
 }
 
 /// Game mode detection methods
@@ -195,9 +297,11 @@ pub struct SettingsOverride {
 pub struct Passwords;
 
 impl Passwords {
-    /// Load password from separate file (just plain text, no RON)
+    /// Load password from separate file by ID (just plain text, no RON)
     #[allow(clippy::missing_errors_doc)]
-    pub fn load(path: &std::path::Path) -> anyhow::Result<Option<String>> {
+    pub fn load(id: &str) -> anyhow::Result<Option<String>> {
+        let path = Self::path_for_id(id)?;
+
         if !path.exists() {
             return Ok(None);
         }
@@ -213,12 +317,20 @@ impl Passwords {
         Ok(Some(trimmed.to_string()))
     }
 
-    /// Get default password file path
+    /// Get password file path for a specific ID
     #[allow(clippy::missing_errors_doc)]
-    pub fn default_path() -> anyhow::Result<std::path::PathBuf> {
+    pub fn path_for_id(id: &str) -> anyhow::Result<std::path::PathBuf> {
         let config_dir =
             dirs::config_dir().ok_or_else(|| anyhow::anyhow!("Failed to get config dir"))?;
-        Ok(config_dir.join("keyboard-middleware").join("password.txt"))
+        Ok(config_dir
+            .join("keyboard-middleware")
+            .join(format!("password_{}.txt", id)))
+    }
+
+    /// Get default password file path (for backward compatibility)
+    #[allow(clippy::missing_errors_doc)]
+    pub fn default_path() -> anyhow::Result<std::path::PathBuf> {
+        Self::path_for_id("default")
     }
 }
 

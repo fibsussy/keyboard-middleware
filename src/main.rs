@@ -219,11 +219,11 @@ fn set_password() -> Result<()> {
     );
     println!();
 
-    // Get password file path
+    // Get password file path (default ID)
     let password_path = Passwords::default_path()?;
 
     // Show current password state
-    let current_password = Passwords::load(&password_path)?;
+    let current_password = Passwords::load("default")?;
     if current_password.is_some() {
         println!(
             "  {} {}",
@@ -292,7 +292,7 @@ fn set_password() -> Result<()> {
     );
     println!();
     println!(
-        "  {} Edit your config.ron to assign a key to Action::Password",
+        "  {} Edit your config.ron to assign a key to Password(\"default\")",
         "Tip:".bright_yellow().bold()
     );
     println!();

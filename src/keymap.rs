@@ -25,15 +25,25 @@ enum KeyAction {
     SocdManaged,
 }
 
+/// SOCD pair tracking
+#[derive(Debug, Clone)]
+struct SocdPair {
+    this_key: KeyCode,
+    opposing_key: KeyCode,
+    this_held: bool,
+    opposing_held: bool,
+    last_input: KeyCode,
+    active_key: Option<KeyCode>,
+}
+
 /// QMK-inspired keymap processor
 pub struct KeymapProcessor {
     /// What each physical key is currently doing (indexed by `KeyCode`)
     held_keys: HashMap<KeyCode, Vec<KeyAction>>,
-    /// Which home row mods are pending (bit flags for efficiency)
-    pending_hrm: u8,
-    /// Last tap time for each HR mod (for double-tap detection)
-    hrm_last_tap: [Option<Instant>; 8],
-    /// Double-tap window in ms
+
+    /// Home row mods - now generic, any key can be an HR mod
+    pending_hrm: HashSet<KeyCode>,
+    hrm_last_tap: HashMap<KeyCode, Instant>,
     double_tap_window_ms: u32,
 
     /// Current active layer
@@ -55,19 +65,13 @@ pub struct KeymapProcessor {
     /// Which OVERLOAD keys are pending (awaiting tap/hold decision)
     pending_overload: HashSet<KeyCode>,
 
-    /// SOCD state tracking
-    socd_w_held: bool,
-    socd_s_held: bool,
-    socd_a_held: bool,
-    socd_d_held: bool,
-    socd_last_vertical: Option<KeyCode>,
-    socd_last_horizontal: Option<KeyCode>,
-    socd_active_keys: [Option<KeyCode>; 2], // [vertical, horizontal]
+    /// SOCD state tracking - now generic, supports any opposing pairs
+    socd_pairs: HashMap<KeyCode, SocdPair>,
 
-    /// Password from config
-    password: Option<String>,
-    /// Last password key tap time
-    password_last_tap: Option<Instant>,
+    /// Passwords from config - supports multiple passwords by ID
+    passwords: HashMap<String, String>,
+    /// Last tap time per password ID
+    password_last_tap: HashMap<String, Instant>,
 }
 
 impl KeymapProcessor {
@@ -76,21 +80,115 @@ impl KeymapProcessor {
     pub fn new(config: &Config) -> Self {
         let mut layers = HashMap::new();
         for (layer, layer_config) in &config.layers {
-            layers.insert(*layer, layer_config.remaps.clone());
+            layers.insert(layer.clone(), layer_config.remaps.clone());
         }
 
-        // Load password from separate file
-        let password = Passwords::default_path()
-            .ok()
-            .and_then(|path| Passwords::load(&path).ok())
-            .flatten();
+        // Load all passwords referenced in config
+        let mut passwords = HashMap::new();
+
+        // Helper to extract password IDs from actions
+        let extract_password_ids = |remaps: &HashMap<KeyCode, ConfigAction>| {
+            let mut ids = Vec::new();
+            for (_key, action) in remaps {
+                if let ConfigAction::Password(id) = action {
+                    ids.push(id.clone());
+                }
+            }
+            ids
+        };
+
+        // Extract from base remaps
+        for id in extract_password_ids(&config.remaps) {
+            if let Ok(Some(pw)) = Passwords::load(&id) {
+                passwords.insert(id, pw);
+            }
+        }
+
+        // Extract from all layers
+        for layer_config in config.layers.values() {
+            for id in extract_password_ids(&layer_config.remaps) {
+                if let Ok(Some(pw)) = Passwords::load(&id) {
+                    passwords.insert(id, pw);
+                }
+            }
+        }
+
+        // Extract from game mode
+        for id in extract_password_ids(&config.game_mode.remaps) {
+            if let Ok(Some(pw)) = Passwords::load(&id) {
+                passwords.insert(id, pw);
+            }
+        }
+
+        // Build SOCD pairs from config
+        let mut socd_pairs = HashMap::new();
+
+        // Helper to extract SOCD pairs
+        let extract_socd_pairs = |remaps: &HashMap<KeyCode, ConfigAction>| {
+            let mut pairs = Vec::new();
+            for (keycode, action) in remaps {
+                if let ConfigAction::Socd {
+                    this_key,
+                    opposing_key,
+                } = action
+                {
+                    pairs.push((*this_key, *opposing_key));
+                }
+            }
+            pairs
+        };
+
+        // Extract from all remaps (base + layers + game_mode)
+        for (this_key, opposing_key) in extract_socd_pairs(&config.remaps) {
+            socd_pairs.insert(
+                this_key,
+                SocdPair {
+                    this_key,
+                    opposing_key,
+                    this_held: false,
+                    opposing_held: false,
+                    last_input: this_key,
+                    active_key: None,
+                },
+            );
+        }
+
+        for layer_config in config.layers.values() {
+            for (this_key, opposing_key) in extract_socd_pairs(&layer_config.remaps) {
+                socd_pairs.insert(
+                    this_key,
+                    SocdPair {
+                        this_key,
+                        opposing_key,
+                        this_held: false,
+                        opposing_held: false,
+                        last_input: this_key,
+                        active_key: None,
+                    },
+                );
+            }
+        }
+
+        for (this_key, opposing_key) in extract_socd_pairs(&config.game_mode.remaps) {
+            socd_pairs.insert(
+                this_key,
+                SocdPair {
+                    this_key,
+                    opposing_key,
+                    this_held: false,
+                    opposing_held: false,
+                    last_input: this_key,
+                    active_key: None,
+                },
+            );
+        }
 
         Self {
             held_keys: HashMap::new(),
-            pending_hrm: 0,
-            hrm_last_tap: [None; 8],
+            pending_hrm: HashSet::new(),
+            hrm_last_tap: HashMap::new(),
             double_tap_window_ms: config.double_tap_window_ms.unwrap_or(300),
-            current_layer: Layer::L_BASE,
+            current_layer: Layer::base(),
             base_remaps: config.remaps.clone(),
             layers,
             game_mode_active: false,
@@ -98,15 +196,9 @@ impl KeymapProcessor {
             tapping_term_ms: config.tapping_term_ms,
             overload_press_times: HashMap::new(),
             pending_overload: HashSet::new(),
-            socd_w_held: false,
-            socd_s_held: false,
-            socd_a_held: false,
-            socd_d_held: false,
-            socd_last_vertical: None,
-            socd_last_horizontal: None,
-            socd_active_keys: [None; 2],
-            password,
-            password_last_tap: None,
+            socd_pairs,
+            passwords,
+            password_last_tap: HashMap::new(),
         }
     }
 
@@ -192,7 +284,7 @@ impl KeymapProcessor {
             }
             Some(ConfigAction::TO(layer)) => {
                 // Layer switch
-                self.current_layer = layer;
+                self.current_layer = layer.clone();
                 actions.push(KeyAction::Layer(layer));
                 self.held_keys.insert(keycode, actions);
                 ProcessResult::None
@@ -254,29 +346,32 @@ impl KeymapProcessor {
                     }
                 }
             }
-            Some(ConfigAction::Socd(key1, _key2)) => {
+            Some(ConfigAction::Socd {
+                this_key,
+                opposing_key: _,
+            }) => {
                 // SOCD handling
                 actions.push(KeyAction::SocdManaged);
                 self.held_keys.insert(keycode, actions);
-                self.apply_socd_to_key_press(key1)
+                self.apply_socd_to_key_press(this_key)
             }
-            Some(ConfigAction::Password) => {
+            Some(ConfigAction::Password(id)) => {
                 // Password typer with double-tap for Enter only
-                let is_double_tap = if let Some(last_tap) = self.password_last_tap {
-                    let elapsed = Instant::now().duration_since(last_tap).as_millis() as u32;
+                let is_double_tap = if let Some(last_tap) = self.password_last_tap.get(&id) {
+                    let elapsed = Instant::now().duration_since(*last_tap).as_millis() as u32;
                     elapsed < self.double_tap_window_ms
                 } else {
                     false
                 };
-                self.password_last_tap = Some(Instant::now());
+                self.password_last_tap.insert(id.clone(), Instant::now());
 
                 if is_double_tap {
                     // Second tap: just press Enter
                     ProcessResult::TapKeyPressRelease(KeyCode::KC_ENT)
                 } else {
                     // First tap: type password
-                    self.password
-                        .as_ref()
+                    self.passwords
+                        .get(&id)
                         .map_or(ProcessResult::None, |password| {
                             ProcessResult::TypeString(password.clone(), false)
                         })
@@ -343,7 +438,7 @@ impl KeymapProcessor {
                     }
                     KeyAction::Layer(_prev_layer) => {
                         // Switch back to base layer
-                        self.current_layer = Layer::L_BASE;
+                        self.current_layer = Layer::base();
                     }
                     KeyAction::HomeRowModPending {
                         tap_key,
@@ -409,7 +504,7 @@ impl KeymapProcessor {
         }
 
         // Check current layer next (if not base)
-        if self.current_layer != Layer::L_BASE {
+        if !self.current_layer.is_base() {
             if let Some(layer_remaps) = self.layers.get(&self.current_layer) {
                 if let Some(action) = layer_remaps.get(&keycode) {
                     return Some(action.clone());
@@ -425,23 +520,21 @@ impl KeymapProcessor {
     fn resolve_pending_hrms_to_hold(&mut self) -> Vec<KeyCode> {
         let mut mod_keys = Vec::new();
 
-        for bit in 0..8 {
-            if (self.pending_hrm & (1 << bit)) != 0 {
-                // This HR mod is pending - resolve it
-                if let Some(keycode) = hrm_bit_to_keycode(bit) {
-                    if let Some(actions) = self.held_keys.get_mut(&keycode) {
-                        // Find the HomeRowModPending action and replace with Modifier
-                        for action in actions.iter_mut() {
-                            if let KeyAction::HomeRowModPending { hold_key, .. } = action {
-                                mod_keys.push(*hold_key);
-                                *action = KeyAction::Modifier(*hold_key);
-                                break;
-                            }
-                        }
+        // Clone the pending set to avoid borrow issues
+        let pending_keys: Vec<KeyCode> = self.pending_hrm.iter().copied().collect();
+
+        for keycode in pending_keys {
+            if let Some(actions) = self.held_keys.get_mut(&keycode) {
+                // Find the HomeRowModPending action and replace with Modifier
+                for action in actions.iter_mut() {
+                    if let KeyAction::HomeRowModPending { hold_key, .. } = action {
+                        mod_keys.push(*hold_key);
+                        *action = KeyAction::Modifier(*hold_key);
+                        break;
                     }
-                    self.clear_hrm_pending(keycode);
                 }
             }
+            self.clear_hrm_pending(keycode);
         }
 
         mod_keys
@@ -449,36 +542,28 @@ impl KeymapProcessor {
 
     // === Home Row Mod Helpers ===
 
-    const fn has_pending_hrm(&self) -> bool {
-        self.pending_hrm != 0
+    fn has_pending_hrm(&self) -> bool {
+        !self.pending_hrm.is_empty()
     }
 
-    const fn set_hrm_pending(&mut self, keycode: KeyCode) {
-        if let Some(bit) = keycode_to_hrm_bit(keycode) {
-            self.pending_hrm |= 1 << bit;
-        }
+    fn set_hrm_pending(&mut self, keycode: KeyCode) {
+        self.pending_hrm.insert(keycode);
     }
 
-    const fn clear_hrm_pending(&mut self, keycode: KeyCode) {
-        if let Some(bit) = keycode_to_hrm_bit(keycode) {
-            self.pending_hrm &= !(1 << bit);
-        }
+    fn clear_hrm_pending(&mut self, keycode: KeyCode) {
+        self.pending_hrm.remove(&keycode);
     }
 
     fn is_double_tap(&self, keycode: KeyCode) -> bool {
-        if let Some(bit) = keycode_to_hrm_bit(keycode) {
-            if let Some(last_tap) = self.hrm_last_tap[bit as usize] {
-                let elapsed = Instant::now().duration_since(last_tap).as_millis() as u32;
-                return elapsed < self.double_tap_window_ms;
-            }
+        if let Some(last_tap) = self.hrm_last_tap.get(&keycode) {
+            let elapsed = Instant::now().duration_since(*last_tap).as_millis() as u32;
+            return elapsed < self.double_tap_window_ms;
         }
         false
     }
 
     fn set_hrm_last_tap(&mut self, keycode: KeyCode) {
-        if let Some(bit) = keycode_to_hrm_bit(keycode) {
-            self.hrm_last_tap[bit as usize] = Some(Instant::now());
-        }
+        self.hrm_last_tap.insert(keycode, Instant::now());
     }
 
     /// Check if this is a double-tap for OVERLOAD (hold base key)
@@ -490,150 +575,103 @@ impl KeymapProcessor {
         false
     }
 
-    // === SOCD Helpers ===
-
-    /// Handle SOCD key press, returns new active keys [vertical, horizontal]
-    const fn socd_handle_press(&mut self, keycode: KeyCode) -> [Option<KeyCode>; 2] {
-        match keycode {
-            KeyCode::KC_W => {
-                self.socd_w_held = true;
-                self.socd_last_vertical = Some(KeyCode::KC_W);
-            }
-            KeyCode::KC_A => {
-                self.socd_a_held = true;
-                self.socd_last_horizontal = Some(KeyCode::KC_A);
-            }
-            KeyCode::KC_S => {
-                self.socd_s_held = true;
-                self.socd_last_vertical = Some(KeyCode::KC_S);
-            }
-            KeyCode::KC_D => {
-                self.socd_d_held = true;
-                self.socd_last_horizontal = Some(KeyCode::KC_D);
-            }
-            _ => {}
-        }
-        self.compute_socd_active_keys()
-    }
-
-    /// Handle SOCD key release, returns new active keys [vertical, horizontal]
-    const fn socd_handle_release(&mut self, keycode: KeyCode) -> [Option<KeyCode>; 2] {
-        match keycode {
-            KeyCode::KC_W => self.socd_w_held = false,
-            KeyCode::KC_A => self.socd_a_held = false,
-            KeyCode::KC_S => self.socd_s_held = false,
-            KeyCode::KC_D => self.socd_d_held = false,
-            _ => {}
-        }
-        self.compute_socd_active_keys()
-    }
-
-    /// Compute which SOCD keys should be active based on held state
-    const fn compute_socd_active_keys(&mut self) -> [Option<KeyCode>; 2] {
-        // Index 0 = vertical key, 1 = horizontal key
-
-        // Vertical resolution (using last input priority)
-        if self.socd_w_held && !self.socd_s_held {
-            self.socd_active_keys[0] = Some(KeyCode::KC_W);
-        } else if self.socd_s_held && !self.socd_w_held {
-            self.socd_active_keys[0] = Some(KeyCode::KC_S);
-        } else if self.socd_w_held && self.socd_s_held {
-            // Both held: last input wins
-            self.socd_active_keys[0] = self.socd_last_vertical;
-        } else {
-            self.socd_active_keys[0] = None;
-        }
-
-        // Horizontal resolution (using last input priority)
-        if self.socd_a_held && !self.socd_d_held {
-            self.socd_active_keys[1] = Some(KeyCode::KC_A);
-        } else if self.socd_d_held && !self.socd_a_held {
-            self.socd_active_keys[1] = Some(KeyCode::KC_D);
-        } else if self.socd_a_held && self.socd_d_held {
-            // Both held: last input wins
-            self.socd_active_keys[1] = self.socd_last_horizontal;
-        } else {
-            self.socd_active_keys[1] = None;
-        }
-
-        self.socd_active_keys
-    }
+    // === SOCD Helpers (Generic) ===
 
     /// Apply SOCD key press - compute new active keys and return events to emit
     fn apply_socd_to_key_press(&mut self, keycode: KeyCode) -> ProcessResult {
-        let old_keys = self.socd_active_keys;
-        let new_keys = self.socd_handle_press(keycode);
-        self.generate_socd_events(old_keys, new_keys)
+        // Find the SOCD pair for this key
+        if let Some(pair) = self.socd_pairs.get_mut(&keycode) {
+            let old_active = pair.active_key;
+
+            // Update state
+            if keycode == pair.this_key {
+                pair.this_held = true;
+                pair.last_input = pair.this_key;
+            } else if keycode == pair.opposing_key {
+                pair.opposing_held = true;
+                pair.last_input = pair.opposing_key;
+            }
+
+            // Compute new active key (Last Input Priority)
+            let new_active = if pair.this_held && !pair.opposing_held {
+                Some(pair.this_key)
+            } else if pair.opposing_held && !pair.this_held {
+                Some(pair.opposing_key)
+            } else if pair.this_held && pair.opposing_held {
+                // Both held: last input wins
+                Some(pair.last_input)
+            } else {
+                None
+            };
+
+            pair.active_key = new_active;
+
+            // Generate transition events
+            self.generate_socd_transition(old_active, new_active)
+        } else {
+            ProcessResult::None
+        }
     }
 
     /// Apply SOCD key release - compute new active keys and return events to emit
     fn apply_socd_to_key_release(&mut self, keycode: KeyCode) -> ProcessResult {
-        let old_keys = self.socd_active_keys;
-        let new_keys = self.socd_handle_release(keycode);
-        self.generate_socd_events(old_keys, new_keys)
-    }
+        // Find the SOCD pair for this key
+        if let Some(pair) = self.socd_pairs.get_mut(&keycode) {
+            let old_active = pair.active_key;
 
-    /// Generate events to transition from `old_keys` to `new_keys`
-    fn generate_socd_events(
-        &self,
-        old_keys: [Option<KeyCode>; 2],
-        new_keys: [Option<KeyCode>; 2],
-    ) -> ProcessResult {
-        let mut events = Vec::new();
-
-        // Release keys that are no longer active
-        for old_key in old_keys.iter().flatten() {
-            // Check if this key is still in new_keys
-            if !new_keys.contains(&Some(*old_key)) {
-                events.push((*old_key, false));
+            // Update state
+            if keycode == pair.this_key {
+                pair.this_held = false;
+            } else if keycode == pair.opposing_key {
+                pair.opposing_held = false;
             }
-        }
 
-        // Press keys that are newly active
-        for new_key in new_keys.iter().flatten() {
-            // Check if this key was already active
-            if !old_keys.contains(&Some(*new_key)) {
-                events.push((*new_key, true));
-            }
-        }
+            // Compute new active key
+            let new_active = if pair.this_held && !pair.opposing_held {
+                Some(pair.this_key)
+            } else if pair.opposing_held && !pair.this_held {
+                Some(pair.opposing_key)
+            } else if pair.this_held && pair.opposing_held {
+                // Both still held: keep last input
+                Some(pair.last_input)
+            } else {
+                None
+            };
 
-        if events.is_empty() {
-            ProcessResult::None
-        } else if events.len() == 1 {
-            ProcessResult::EmitKey(events[0].0, events[0].1)
+            pair.active_key = new_active;
+
+            // Generate transition events
+            self.generate_socd_transition(old_active, new_active)
         } else {
-            ProcessResult::MultipleEvents(events)
+            ProcessResult::None
         }
     }
-}
 
-// === HR Mod Bit Mapping ===
-
-const fn keycode_to_hrm_bit(keycode: KeyCode) -> Option<u8> {
-    match keycode {
-        KeyCode::KC_A => Some(0),
-        KeyCode::KC_S => Some(1),
-        KeyCode::KC_D => Some(2),
-        KeyCode::KC_F => Some(3),
-        KeyCode::KC_J => Some(4),
-        KeyCode::KC_K => Some(5),
-        KeyCode::KC_L => Some(6),
-        KeyCode::KC_SCLN => Some(7),
-        _ => None,
-    }
-}
-
-const fn hrm_bit_to_keycode(bit: u8) -> Option<KeyCode> {
-    match bit {
-        0 => Some(KeyCode::KC_A),
-        1 => Some(KeyCode::KC_S),
-        2 => Some(KeyCode::KC_D),
-        3 => Some(KeyCode::KC_F),
-        4 => Some(KeyCode::KC_J),
-        5 => Some(KeyCode::KC_K),
-        6 => Some(KeyCode::KC_L),
-        7 => Some(KeyCode::KC_SCLN),
-        _ => None,
+    /// Generate transition events from old to new active key
+    fn generate_socd_transition(
+        &self,
+        old_active: Option<KeyCode>,
+        new_active: Option<KeyCode>,
+    ) -> ProcessResult {
+        match (old_active, new_active) {
+            (None, None) => ProcessResult::None,
+            (None, Some(new_key)) => {
+                // Press new key
+                ProcessResult::EmitKey(new_key, true)
+            }
+            (Some(old_key), None) => {
+                // Release old key
+                ProcessResult::EmitKey(old_key, false)
+            }
+            (Some(old_key), Some(new_key)) if old_key == new_key => {
+                // Same key, no change
+                ProcessResult::None
+            }
+            (Some(old_key), Some(new_key)) => {
+                // Transition: release old, press new
+                ProcessResult::MultipleEvents(vec![(old_key, false), (new_key, true)])
+            }
+        }
     }
 }
 
@@ -747,6 +785,90 @@ pub const fn evdev_to_keycode(key: Key) -> Option<KeyCode> {
         Key::KEY_F10 => Some(KeyCode::KC_F10),
         Key::KEY_F11 => Some(KeyCode::KC_F11),
         Key::KEY_F12 => Some(KeyCode::KC_F12),
+        Key::KEY_F13 => Some(KeyCode::KC_F13),
+        Key::KEY_F14 => Some(KeyCode::KC_F14),
+        Key::KEY_F15 => Some(KeyCode::KC_F15),
+        Key::KEY_F16 => Some(KeyCode::KC_F16),
+        Key::KEY_F17 => Some(KeyCode::KC_F17),
+        Key::KEY_F18 => Some(KeyCode::KC_F18),
+        Key::KEY_F19 => Some(KeyCode::KC_F19),
+        Key::KEY_F20 => Some(KeyCode::KC_F20),
+        Key::KEY_F21 => Some(KeyCode::KC_F21),
+        Key::KEY_F22 => Some(KeyCode::KC_F22),
+        Key::KEY_F23 => Some(KeyCode::KC_F23),
+        Key::KEY_F24 => Some(KeyCode::KC_F24),
+
+        // Navigation keys
+        Key::KEY_PAGEUP => Some(KeyCode::KC_PGUP),
+        Key::KEY_PAGEDOWN => Some(KeyCode::KC_PGDN),
+        Key::KEY_HOME => Some(KeyCode::KC_HOME),
+        Key::KEY_END => Some(KeyCode::KC_END),
+        Key::KEY_INSERT => Some(KeyCode::KC_INS),
+        Key::KEY_SYSRQ => Some(KeyCode::KC_PSCR),
+
+        // Numpad keys
+        Key::KEY_KP0 => Some(KeyCode::KC_KP_0),
+        Key::KEY_KP1 => Some(KeyCode::KC_KP_1),
+        Key::KEY_KP2 => Some(KeyCode::KC_KP_2),
+        Key::KEY_KP3 => Some(KeyCode::KC_KP_3),
+        Key::KEY_KP4 => Some(KeyCode::KC_KP_4),
+        Key::KEY_KP5 => Some(KeyCode::KC_KP_5),
+        Key::KEY_KP6 => Some(KeyCode::KC_KP_6),
+        Key::KEY_KP7 => Some(KeyCode::KC_KP_7),
+        Key::KEY_KP8 => Some(KeyCode::KC_KP_8),
+        Key::KEY_KP9 => Some(KeyCode::KC_KP_9),
+        Key::KEY_KPSLASH => Some(KeyCode::KC_KP_SLASH),
+        Key::KEY_KPASTERISK => Some(KeyCode::KC_KP_ASTERISK),
+        Key::KEY_KPMINUS => Some(KeyCode::KC_KP_MINUS),
+        Key::KEY_KPPLUS => Some(KeyCode::KC_KP_PLUS),
+        Key::KEY_KPENTER => Some(KeyCode::KC_KP_ENTER),
+        Key::KEY_KPDOT => Some(KeyCode::KC_KP_DOT),
+        Key::KEY_NUMLOCK => Some(KeyCode::KC_NUM_LOCK),
+
+        // Media keys
+        Key::KEY_MUTE => Some(KeyCode::KC_MUTE),
+        Key::KEY_VOLUMEUP => Some(KeyCode::KC_VOL_UP),
+        Key::KEY_VOLUMEDOWN => Some(KeyCode::KC_VOL_DN),
+        Key::KEY_PLAYPAUSE => Some(KeyCode::KC_MEDIA_PLAY_PAUSE),
+        Key::KEY_STOPCD => Some(KeyCode::KC_MEDIA_STOP),
+        Key::KEY_NEXTSONG => Some(KeyCode::KC_MEDIA_NEXT_TRACK),
+        Key::KEY_PREVIOUSSONG => Some(KeyCode::KC_MEDIA_PREV_TRACK),
+        Key::KEY_MEDIA => Some(KeyCode::KC_MEDIA_SELECT),
+
+        // System keys
+        Key::KEY_POWER => Some(KeyCode::KC_PWR),
+        Key::KEY_SLEEP => Some(KeyCode::KC_SLEP),
+        Key::KEY_WAKEUP => Some(KeyCode::KC_WAKE),
+        Key::KEY_CALC => Some(KeyCode::KC_CALC),
+        Key::KEY_COMPUTER => Some(KeyCode::KC_MY_COMP),
+        Key::KEY_SEARCH => Some(KeyCode::KC_WWW_SEARCH),
+        Key::KEY_HOMEPAGE => Some(KeyCode::KC_WWW_HOME),
+        Key::KEY_BACK => Some(KeyCode::KC_WWW_BACK),
+        Key::KEY_FORWARD => Some(KeyCode::KC_WWW_FORWARD),
+        Key::KEY_STOP => Some(KeyCode::KC_WWW_STOP),
+        Key::KEY_REFRESH => Some(KeyCode::KC_WWW_REFRESH),
+        Key::KEY_BOOKMARKS => Some(KeyCode::KC_WWW_FAVORITES),
+
+        // Locking keys
+        Key::KEY_SCROLLLOCK => Some(KeyCode::KC_SCRL),
+        Key::KEY_PAUSE => Some(KeyCode::KC_PAUS),
+
+        // Application keys
+        Key::KEY_PROPS => Some(KeyCode::KC_APP),
+        Key::KEY_MENU => Some(KeyCode::KC_MENU),
+
+        // Multimedia keys
+        Key::KEY_BRIGHTNESSUP => Some(KeyCode::KC_BRIU),
+        Key::KEY_BRIGHTNESSDOWN => Some(KeyCode::KC_BRID),
+        Key::KEY_DISPLAYTOGGLE => Some(KeyCode::KC_DISPLAY_OFF),
+        Key::KEY_WLAN => Some(KeyCode::KC_WLAN),
+        Key::KEY_BLUETOOTH => Some(KeyCode::KC_BLUETOOTH),
+        Key::KEY_SWITCHVIDEOMODE => Some(KeyCode::KC_KEYBOARD_LAYOUT),
+
+        // International keys
+        Key::KEY_102ND => Some(KeyCode::KC_INTL_BACKSLASH),
+        Key::KEY_YEN => Some(KeyCode::KC_INTL_YEN),
+        Key::KEY_RO => Some(KeyCode::KC_INTL_RO),
 
         _ => None,
     }
@@ -844,5 +966,89 @@ pub const fn keycode_to_evdev(keycode: KeyCode) -> Key {
         KeyCode::KC_F10 => Key::KEY_F10,
         KeyCode::KC_F11 => Key::KEY_F11,
         KeyCode::KC_F12 => Key::KEY_F12,
+        KeyCode::KC_F13 => Key::KEY_F13,
+        KeyCode::KC_F14 => Key::KEY_F14,
+        KeyCode::KC_F15 => Key::KEY_F15,
+        KeyCode::KC_F16 => Key::KEY_F16,
+        KeyCode::KC_F17 => Key::KEY_F17,
+        KeyCode::KC_F18 => Key::KEY_F18,
+        KeyCode::KC_F19 => Key::KEY_F19,
+        KeyCode::KC_F20 => Key::KEY_F20,
+        KeyCode::KC_F21 => Key::KEY_F21,
+        KeyCode::KC_F22 => Key::KEY_F22,
+        KeyCode::KC_F23 => Key::KEY_F23,
+        KeyCode::KC_F24 => Key::KEY_F24,
+
+        // Navigation keys
+        KeyCode::KC_PGUP => Key::KEY_PAGEUP,
+        KeyCode::KC_PGDN => Key::KEY_PAGEDOWN,
+        KeyCode::KC_HOME => Key::KEY_HOME,
+        KeyCode::KC_END => Key::KEY_END,
+        KeyCode::KC_INS => Key::KEY_INSERT,
+        KeyCode::KC_PSCR => Key::KEY_SYSRQ,
+
+        // Numpad keys
+        KeyCode::KC_KP_0 => Key::KEY_KP0,
+        KeyCode::KC_KP_1 => Key::KEY_KP1,
+        KeyCode::KC_KP_2 => Key::KEY_KP2,
+        KeyCode::KC_KP_3 => Key::KEY_KP3,
+        KeyCode::KC_KP_4 => Key::KEY_KP4,
+        KeyCode::KC_KP_5 => Key::KEY_KP5,
+        KeyCode::KC_KP_6 => Key::KEY_KP6,
+        KeyCode::KC_KP_7 => Key::KEY_KP7,
+        KeyCode::KC_KP_8 => Key::KEY_KP8,
+        KeyCode::KC_KP_9 => Key::KEY_KP9,
+        KeyCode::KC_KP_SLASH => Key::KEY_KPSLASH,
+        KeyCode::KC_KP_ASTERISK => Key::KEY_KPASTERISK,
+        KeyCode::KC_KP_MINUS => Key::KEY_KPMINUS,
+        KeyCode::KC_KP_PLUS => Key::KEY_KPPLUS,
+        KeyCode::KC_KP_ENTER => Key::KEY_KPENTER,
+        KeyCode::KC_KP_DOT => Key::KEY_KPDOT,
+        KeyCode::KC_NUM_LOCK => Key::KEY_NUMLOCK,
+
+        // Media keys
+        KeyCode::KC_MUTE => Key::KEY_MUTE,
+        KeyCode::KC_VOL_UP => Key::KEY_VOLUMEUP,
+        KeyCode::KC_VOL_DN => Key::KEY_VOLUMEDOWN,
+        KeyCode::KC_MEDIA_PLAY_PAUSE => Key::KEY_PLAYPAUSE,
+        KeyCode::KC_MEDIA_STOP => Key::KEY_STOPCD,
+        KeyCode::KC_MEDIA_NEXT_TRACK => Key::KEY_NEXTSONG,
+        KeyCode::KC_MEDIA_PREV_TRACK => Key::KEY_PREVIOUSSONG,
+        KeyCode::KC_MEDIA_SELECT => Key::KEY_MEDIA,
+
+        // System keys
+        KeyCode::KC_PWR => Key::KEY_POWER,
+        KeyCode::KC_SLEP => Key::KEY_SLEEP,
+        KeyCode::KC_WAKE => Key::KEY_WAKEUP,
+        KeyCode::KC_CALC => Key::KEY_CALC,
+        KeyCode::KC_MY_COMP => Key::KEY_COMPUTER,
+        KeyCode::KC_WWW_SEARCH => Key::KEY_SEARCH,
+        KeyCode::KC_WWW_HOME => Key::KEY_HOMEPAGE,
+        KeyCode::KC_WWW_BACK => Key::KEY_BACK,
+        KeyCode::KC_WWW_FORWARD => Key::KEY_FORWARD,
+        KeyCode::KC_WWW_STOP => Key::KEY_STOP,
+        KeyCode::KC_WWW_REFRESH => Key::KEY_REFRESH,
+        KeyCode::KC_WWW_FAVORITES => Key::KEY_BOOKMARKS,
+
+        // Locking keys
+        KeyCode::KC_SCRL => Key::KEY_SCROLLLOCK,
+        KeyCode::KC_PAUS => Key::KEY_PAUSE,
+
+        // Application keys
+        KeyCode::KC_APP => Key::KEY_PROPS,
+        KeyCode::KC_MENU => Key::KEY_MENU,
+
+        // Multimedia keys
+        KeyCode::KC_BRIU => Key::KEY_BRIGHTNESSUP,
+        KeyCode::KC_BRID => Key::KEY_BRIGHTNESSDOWN,
+        KeyCode::KC_DISPLAY_OFF => Key::KEY_DISPLAYTOGGLE,
+        KeyCode::KC_WLAN => Key::KEY_WLAN,
+        KeyCode::KC_BLUETOOTH => Key::KEY_BLUETOOTH,
+        KeyCode::KC_KEYBOARD_LAYOUT => Key::KEY_SWITCHVIDEOMODE,
+
+        // International keys
+        KeyCode::KC_INTL_BACKSLASH => Key::KEY_102ND,
+        KeyCode::KC_INTL_YEN => Key::KEY_YEN,
+        KeyCode::KC_INTL_RO => Key::KEY_RO,
     }
 }
