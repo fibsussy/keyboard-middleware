@@ -673,22 +673,119 @@ impl AsyncDaemon {
     /// Returns: Receiver<()> that signals when any config changed
     fn start_config_watcher(&self) -> mpsc::Receiver<()> {
         use notify::{recommended_watcher, Event, EventKind, RecursiveMode, Watcher};
+        use std::path::Path;
 
         let (tx, rx) = mpsc::channel();
 
         thread::spawn(move || {
             let (watch_tx, watch_rx) = std::sync::mpsc::channel();
 
-            let mut watcher = match recommended_watcher(watch_tx) {
-                Ok(w) => w,
+            let mut watcher: Box<dyn Watcher> = match recommended_watcher(watch_tx) {
+                Ok(w) => Box::new(w),
                 Err(e) => {
                     error!("Failed to create config file watcher: {}", e);
                     return;
                 }
             };
 
-            // Build set of config paths by scanning /home
+            // Track both original paths and resolved targets for symlinks
             let mut watched_paths: HashSet<PathBuf> = HashSet::new();
+            let mut watched_dirs: HashSet<PathBuf> = HashSet::new();
+
+            /// Resolve symlinks to get the final target path
+            fn resolve_symlink(path: &Path) -> Option<PathBuf> {
+                match std::fs::symlink_metadata(path) {
+                    Ok(metadata) => {
+                        if metadata.file_type().is_symlink() {
+                            match std::fs::read_link(path) {
+                                Ok(link_target) => {
+                                    // If the symlink target is relative, resolve it relative to the symlink's parent
+                                    let resolved = if link_target.is_absolute() {
+                                        link_target
+                                    } else {
+                                        path.parent()
+                                            .unwrap_or_else(|| Path::new("."))
+                                            .join(&link_target)
+                                            .canonicalize()
+                                            .unwrap_or_else(|_| link_target)
+                                    };
+                                    Some(resolved)
+                                }
+                                Err(_) => None,
+                            }
+                        } else {
+                            Some(path.to_path_buf())
+                        }
+                    }
+                    Err(_) => None,
+                }
+            }
+
+            /// Add a config to be watched, handling symlinks properly
+            fn add_config_watch(
+                config_path: PathBuf,
+                watcher: &mut Box<dyn Watcher>,
+                watched_paths: &mut HashSet<PathBuf>,
+                watched_dirs: &mut HashSet<PathBuf>,
+            ) {
+                // Watch the directory containing the config
+                let config_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
+
+                // Resolve any symlinks in the directory path
+                let resolved_dir = match resolve_symlink(config_dir) {
+                    Some(dir) => dir,
+                    None => {
+                        warn!("Failed to resolve config directory: {:?}", config_dir);
+                        return;
+                    }
+                };
+
+                // Watch the resolved directory
+                if let Err(e) = watcher.watch(&resolved_dir, RecursiveMode::NonRecursive) {
+                    warn!("Failed to watch directory {:?}: {}", resolved_dir, e);
+                    return;
+                }
+
+                // Track both original and resolved paths
+                watched_paths.insert(config_path.clone());
+                watched_dirs.insert(resolved_dir.clone());
+
+                // If config path itself is a symlink, also watch its resolved target
+                if let Some(resolved_config) = resolve_symlink(&config_path) {
+                    if resolved_config != config_path {
+                        let resolved_config_dir =
+                            resolved_config.parent().unwrap_or_else(|| Path::new("."));
+                        if resolved_config_dir != resolved_dir {
+                            if let Err(e) =
+                                watcher.watch(resolved_config_dir, RecursiveMode::NonRecursive)
+                            {
+                                warn!(
+                                    "Failed to watch symlink target directory {:?}: {}",
+                                    resolved_config_dir, e
+                                );
+                            } else {
+                                watched_dirs.insert(resolved_config_dir.to_path_buf());
+                            }
+                        }
+                        watched_paths.insert(resolved_config);
+                    }
+                }
+
+                let symlink_info = if let Ok(metadata) = std::fs::symlink_metadata(&config_path) {
+                    if metadata.file_type().is_symlink() {
+                        format!(
+                            " (symlink -> {:?})",
+                            resolve_symlink(&config_path).unwrap_or_default()
+                        )
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                };
+
+                info!("Watching config at {:?}{}", config_path, symlink_info);
+            }
 
             // Scan for users with keyboard-middleware configs
             if let Ok(entries) = std::fs::read_dir("/home") {
@@ -698,20 +795,20 @@ impl AsyncDaemon {
                     let config_path = config_dir.join("config.ron");
 
                     if config_path.exists() {
-                        // Watch the config directory (not recursively)
-                        if let Err(e) = watcher.watch(&config_dir, RecursiveMode::NonRecursive) {
-                            warn!("Failed to watch {:?}: {}", config_dir, e);
-                        } else {
-                            info!("Watching config at {:?}", config_path);
-                            watched_paths.insert(config_path);
-                        }
+                        add_config_watch(
+                            config_path,
+                            &mut watcher,
+                            &mut watched_paths,
+                            &mut watched_dirs,
+                        );
                     }
                 }
             }
 
             info!(
-                "Config file watcher started for {} config(s)",
-                watched_paths.len()
+                "Config file watcher started for {} config(s) in {} director(y/ies)",
+                watched_paths.len(),
+                watched_dirs.len()
             );
 
             loop {
@@ -721,12 +818,28 @@ impl AsyncDaemon {
                         paths,
                         ..
                     })) => {
-                        // Check if any modified file is a config.ron we're watching
+                        // Check if any modified file relates to our watched configs
                         let mut detected_change = false;
                         for path in paths {
+                            // Check direct path match
                             if watched_paths.contains(&path) {
                                 info!("Config file changed: {:?}", path);
                                 detected_change = true;
+                                break;
+                            }
+
+                            // Check if this path is a symlink target of any watched config
+                            for watched_path in &watched_paths {
+                                if let Some(resolved) = resolve_symlink(watched_path) {
+                                    if path == resolved {
+                                        info!("Config file changed via symlink target: {:?} (original: {:?})", path, watched_path);
+                                        detected_change = true;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            if detected_change {
                                 break;
                             }
                         }
