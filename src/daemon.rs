@@ -928,23 +928,53 @@ impl AsyncDaemon {
         }
     }
 
+    /// Send a desktop notification to a user
+    /// Only sends if notifications are enabled in the user's config
+    async fn send_notification(&self, uid: u32, title: &str, message: &str, urgency: &str) {
+        // Check if user has a config and if notifications are enabled
+        let notifications_enabled = if let Some(cm) = self.user_configs.get(&uid) {
+            cm.get_config().await.enable_notifications
+        } else {
+            true // Default to true if config not loaded yet
+        };
+
+        if !notifications_enabled {
+            debug!("Notifications disabled for user {}, skipping", uid);
+            return;
+        }
+
+        let result = std::process::Command::new("runuser")
+            .args([
+                "-u",
+                &uid.to_string(),
+                "--",
+                "/usr/bin/notify-send",
+                "-u",
+                urgency, // "low", "normal", or "critical"
+                title,
+                message,
+            ])
+            .spawn();
+
+        if let Err(e) = result {
+            warn!("Failed to send notification to user {}: {}", uid, e);
+        }
+    }
+
     /// Reload all user configs and restart processors
     async fn reload_all_configs(&mut self) -> Result<()> {
         info!("Reloading all user configs...");
 
         // Send notification to all users who own keyboards
         let owner_uids: HashSet<u32> = self.keyboard_owners.values().copied().collect();
-        for uid in owner_uids {
-            let _ = std::process::Command::new("runuser")
-                .args([
-                    "-u",
-                    &uid.to_string(),
-                    "--",
-                    "/usr/bin/notify-send",
-                    "Keyboard Middleware",
-                    "Reloading configuration...",
-                ])
-                .spawn();
+        for uid in &owner_uids {
+            self.send_notification(
+                *uid,
+                "Keyboard Middleware",
+                "Reloading configuration...",
+                "low",
+            )
+            .await;
         }
 
         // Step 1: Validate all configs before stopping anything
@@ -962,12 +992,34 @@ impl AsyncDaemon {
                 let new_config = match crate::config::Config::load(&config_path) {
                     Ok(cfg) => cfg,
                     Err(e) => {
+                        let error_msg = format!("Config load failed:\n{}", e);
                         error!("Config load failed for user {}: {}", uid, e);
+
+                        // Send error notification
+                        self.send_notification(
+                            uid,
+                            "Keyboard Middleware - Error",
+                            &error_msg,
+                            "critical",
+                        )
+                        .await;
+
                         return Err(anyhow::anyhow!("Invalid config for user {}: {}", uid, e));
                     }
                 };
                 if let Err(e) = new_config.validate_silent() {
+                    let error_msg = format!("Config validation failed:\n{}", e);
                     error!("Config validation failed for user {}: {}", uid, e);
+
+                    // Send error notification
+                    self.send_notification(
+                        uid,
+                        "Keyboard Middleware - Error",
+                        &error_msg,
+                        "critical",
+                    )
+                    .await;
+
                     return Err(anyhow::anyhow!("Invalid config for user {}: {}", uid, e));
                 }
             }
@@ -990,6 +1042,18 @@ impl AsyncDaemon {
         self.sync_keyboards_to_users().await;
 
         info!("Config reload complete!");
+
+        // Send success notification to all users who own keyboards
+        for uid in &owner_uids {
+            self.send_notification(
+                *uid,
+                "Keyboard Middleware",
+                "Configuration reloaded successfully!",
+                "low",
+            )
+            .await;
+        }
+
         Ok(())
     }
 

@@ -467,6 +467,13 @@ pub struct Config {
     /// - false: per_keyboard_overrides replace global config (build from scratch)
     #[serde(default = "default_true_bool")]
     pub per_keyboard_inherits_global_layout: bool,
+
+    /// Enable system notifications for config reload events (default: true)
+    /// When enabled, shows desktop notifications for:
+    /// - Successful config reloads
+    /// - Config reload errors with detailed error messages
+    #[serde(default = "default_true_bool")]
+    pub enable_notifications: bool,
 }
 
 fn default_tapping_term() -> u32 {
@@ -604,6 +611,7 @@ impl Config {
                     per_keyboard_overrides: HashMap::new(), // Don't nest overrides
                     hot_config_reload: self.hot_config_reload, // Keep global hot reload setting
                     per_keyboard_inherits_global_layout: self.per_keyboard_inherits_global_layout, // Keep global setting
+                    enable_notifications: self.enable_notifications, // Keep global notification setting
                 }
             }
         } else {
