@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use tracing::warn;
 
 use crate::config::{Action as ConfigAction, Config, KeyCode, Layer};
+use crate::doubletap::{DtConfig, DtProcessor, DtResolution};
 use crate::modtap::{MtAction, MtConfig as ModtapConfig, MtProcessor, MtResolution, RollingStats};
 
 /// What a key press is doing (recorded on press, replayed on release)
@@ -18,6 +19,8 @@ enum KeyAction {
     MtManaged,
     /// SOCD managed key
     SocdManaged,
+    /// DT key managed by DT processor
+    DtManaged,
 }
 
 /// SOCD group configuration
@@ -38,6 +41,9 @@ pub struct KeymapProcessor {
 
     /// MT (Mod-Tap) processor
     mt_processor: MtProcessor,
+
+    /// DT (Double-Tap) processor
+    dt_processor: DtProcessor,
 
     /// Current active layer
     current_layer: Layer,
@@ -138,9 +144,15 @@ impl KeymapProcessor {
             adaptive_target_margin_ms: config.mt_config.adaptive_target_margin_ms,
         };
 
+        // Build DT processor config
+        let dt_config = DtConfig {
+            double_tap_window_ms: config.double_tap_window_ms.unwrap_or(250),
+        };
+
         Self {
             held_keys: HashMap::new(),
             mt_processor: MtProcessor::new(mt_config),
+            dt_processor: DtProcessor::new(dt_config),
             current_layer: Layer::base(),
             base_remaps: config.remaps.clone(),
             layers,
@@ -274,6 +286,15 @@ impl KeymapProcessor {
         "/root".to_string()
     }
 
+    /// Extract a KeyCode from an Action (for processor compatibility)
+    /// Returns None if the action is not a simple Key(KC_*) action
+    fn extract_keycode(action: &ConfigAction) -> Option<KeyCode> {
+        match action {
+            ConfigAction::Key(kc) => Some(*kc),
+            _ => None,
+        }
+    }
+
     /// Process a key event
     pub fn process_key(&mut self, keycode: KeyCode, pressed: bool) -> ProcessResult {
         if pressed {
@@ -382,10 +403,40 @@ impl KeymapProcessor {
                 warn!("OSM action not yet implemented");
                 ProcessResult::None
             }
-            Some(ConfigAction::DT(_tap_action, _double_tap_action)) => {
-                // TODO: Double-Tap - to be implemented next
-                warn!("DT action not yet implemented");
-                ProcessResult::None
+            Some(ConfigAction::DT(tap_action, double_tap_action)) => {
+                // DT (Double-Tap) - extract KeyCodes for simple cases
+                if let (Some(tap_key), Some(dtap_key)) = (
+                    Self::extract_keycode(tap_action.as_ref()),
+                    Self::extract_keycode(double_tap_action.as_ref()),
+                ) {
+                    // Check DT timeouts first (handled later in event loop)
+                    let _timeouts = self.dt_processor.check_timeouts();
+
+                    // Register this DT key
+                    let resolution = self.dt_processor.on_press(keycode, tap_key, dtap_key);
+
+                    actions.push(KeyAction::DtManaged);
+                    self.held_keys.insert(keycode, actions);
+
+                    match resolution {
+                        DtResolution::DoubleTap(key) => {
+                            // Double-tap detected! Emit immediately
+                            ProcessResult::TapKeyPressRelease(key)
+                        }
+                        DtResolution::SingleTap(key) => {
+                            // Timeout on first press (held too long)
+                            ProcessResult::TapKeyPressRelease(key)
+                        }
+                        DtResolution::Undecided => {
+                            // Waiting for tap/double-tap decision
+                            ProcessResult::None
+                        }
+                    }
+                } else {
+                    // DT with complex actions not yet supported
+                    warn!("DT with non-Key actions not yet supported");
+                    ProcessResult::None
+                }
             }
             None => {
                 // No remap - check if MT keys are pending (permissive hold)
@@ -450,6 +501,23 @@ impl KeymapProcessor {
                     KeyAction::SocdManaged => {
                         // Apply SOCD release logic
                         return self.apply_socd_to_key_release(keycode);
+                    }
+                    KeyAction::DtManaged => {
+                        // Let DT processor handle the release
+                        let resolution = self.dt_processor.on_release(keycode);
+                        match resolution {
+                            DtResolution::SingleTap(key) => {
+                                return ProcessResult::TapKeyPressRelease(key);
+                            }
+                            DtResolution::DoubleTap(_key) => {
+                                // Already emitted on second press
+                                return ProcessResult::None;
+                            }
+                            DtResolution::Undecided => {
+                                // Still waiting
+                                return ProcessResult::None;
+                            }
+                        }
                     }
                 }
             }

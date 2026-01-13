@@ -48,13 +48,14 @@ pub mod config;
 mod config_manager;
 mod daemon;
 mod debug;
+mod doubletap;
 mod event_processor;
 mod ipc;
 mod keyboard_id;
 mod keymap;
 mod list;
 mod modtap;
-pub mod niri;
+mod niri;
 mod session_manager;
 mod toggle;
 
