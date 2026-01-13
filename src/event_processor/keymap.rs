@@ -155,6 +155,7 @@ impl KeymapProcessor {
 
         // Build DT processor config
         let dt_config = DtConfig {
+            tapping_term_ms: config.tapping_term_ms,
             double_tap_window_ms: config.double_tap_window_ms.unwrap_or(250),
         };
 
@@ -327,6 +328,17 @@ impl KeymapProcessor {
         self.key_press_times
             .insert(keycode, std::time::Instant::now());
 
+        // Check DT timeouts at the start of every key press
+        // This ensures pending taps are emitted even if user is typing other keys
+        let dt_timeout_events = {
+            let timeouts = self.dt_processor.check_timeouts();
+            if !timeouts.is_empty() {
+                self.process_dt_timeouts(timeouts)
+            } else {
+                Vec::new()
+            }
+        };
+
         // Look up action for this key
         let action = self.lookup_action(keycode);
 
@@ -338,13 +350,14 @@ impl KeymapProcessor {
 
                 // Notify MT processor (for permissive hold)
                 let mt_resolutions = self.mt_processor.on_other_key_press(output_key);
-                if !mt_resolutions.is_empty() {
+                let result = if !mt_resolutions.is_empty() {
                     let mut events = vec![(output_key, true)];
                     events.extend(self.apply_mt_resolutions(mt_resolutions));
                     ProcessResult::MultipleEvents(events)
                 } else {
                     ProcessResult::EmitKey(output_key, true)
-                }
+                };
+                self.combine_with_timeouts(dt_timeout_events.clone(), result)
             }
             Some(ConfigAction::MT(tap_action, hold_action)) => {
                 // MT now uses Box<Action> - extract KeyCode if it's a simple Key action
@@ -362,7 +375,8 @@ impl KeymapProcessor {
                     let mt_resolutions = self.mt_processor.on_other_key_press(tap_key);
 
                     // Then register this MT key
-                    if let Some(resolution) = self.mt_processor.on_press(keycode, tap_key, hold_key)
+                    let result = if let Some(resolution) =
+                        self.mt_processor.on_press(keycode, tap_key, hold_key)
                     {
                         // Double-tap detected, emit the hold immediately
                         actions.push(KeyAction::MtManaged);
@@ -385,11 +399,12 @@ impl KeymapProcessor {
                         } else {
                             ProcessResult::None
                         }
-                    }
+                    };
+                    self.combine_with_timeouts(dt_timeout_events.clone(), result)
                 } else {
                     // MT with complex nested actions not yet supported
                     warn!("MT with non-Key actions not yet supported (e.g., MT(TO(...), ...))");
-                    ProcessResult::None
+                    self.combine_with_timeouts(dt_timeout_events.clone(), ProcessResult::None)
                 }
             }
             Some(ConfigAction::TO(layer)) => {
@@ -397,46 +412,52 @@ impl KeymapProcessor {
                 self.current_layer = layer.clone();
                 actions.push(KeyAction::Layer(layer));
                 self.held_keys.insert(keycode, actions);
-                ProcessResult::None
+                self.combine_with_timeouts(dt_timeout_events.clone(), ProcessResult::None)
             }
             Some(ConfigAction::SOCD(this_action, _opposing_actions)) => {
                 // SOCD handling - extract KeyCode from Action
-                if let ConfigAction::Key(this_key) = this_action.as_ref() {
+                let result = if let ConfigAction::Key(this_key) = this_action.as_ref() {
                     actions.push(KeyAction::SocdManaged);
                     self.held_keys.insert(keycode, actions);
                     self.apply_socd_to_key_press(*this_key)
                 } else {
                     warn!("SOCD with non-Key actions not yet supported");
                     ProcessResult::None
-                }
+                };
+                self.combine_with_timeouts(dt_timeout_events.clone(), result)
             }
             Some(ConfigAction::CMD(command)) => {
                 // Run arbitrary command
-                ProcessResult::RunCommand(command.clone())
+                self.combine_with_timeouts(
+                    dt_timeout_events.clone(),
+                    ProcessResult::RunCommand(command.clone()),
+                )
             }
             Some(ConfigAction::OSM(modifier_action)) => {
                 // OSM (OneShot Modifier) - extract KeyCode for simple cases
-                if let Some(modifier_key) = Self::extract_keycode(modifier_action.as_ref()) {
-                    // Check OSM timeouts first
-                    let timeouts = self.osm_processor.check_timeouts();
-                    // Process timeouts if any (emit release events)
-                    if !timeouts.is_empty() {
-                        // These will be handled in the event loop
-                    }
+                let result =
+                    if let Some(modifier_key) = Self::extract_keycode(modifier_action.as_ref()) {
+                        // Check OSM timeouts first
+                        let timeouts = self.osm_processor.check_timeouts();
+                        // Process timeouts if any (emit release events)
+                        if !timeouts.is_empty() {
+                            // These will be handled in the event loop
+                        }
 
-                    // Register this OSM key
-                    let _resolution = self.osm_processor.on_press(keycode, modifier_key);
+                        // Register this OSM key
+                        let _resolution = self.osm_processor.on_press(keycode, modifier_key);
 
-                    actions.push(KeyAction::OsmManaged);
-                    self.held_keys.insert(keycode, actions);
+                        actions.push(KeyAction::OsmManaged);
+                        self.held_keys.insert(keycode, actions);
 
-                    // OSM doesn't emit on press, waits for release to determine tap/hold
-                    ProcessResult::None
-                } else {
-                    // OSM with complex actions not yet supported
-                    warn!("OSM with non-Key actions not yet supported");
-                    ProcessResult::None
-                }
+                        // OSM doesn't emit on press, waits for release to determine tap/hold
+                        ProcessResult::None
+                    } else {
+                        // OSM with complex actions not yet supported
+                        warn!("OSM with non-Key actions not yet supported");
+                        ProcessResult::None
+                    };
+                self.combine_with_timeouts(dt_timeout_events.clone(), result)
             }
             Some(ConfigAction::DT(tap_action, double_tap_action)) => {
                 // DT (Double-Tap) - extract KeyCodes for simple cases
@@ -444,29 +465,33 @@ impl KeymapProcessor {
                     Self::extract_keycode(tap_action.as_ref()),
                     Self::extract_keycode(double_tap_action.as_ref()),
                 ) {
-                    // Check DT timeouts first (handled later in event loop)
-                    let _timeouts = self.dt_processor.check_timeouts();
-
                     // Register this DT key
                     let resolution = self.dt_processor.on_press(keycode, tap_key, dtap_key);
 
                     actions.push(KeyAction::DtManaged);
                     self.held_keys.insert(keycode, actions);
 
-                    match resolution {
-                        DtResolution::DoubleTap(key) => {
-                            // Double-tap detected! Emit immediately
-                            ProcessResult::TapKeyPressRelease(key)
+                    let result = match resolution {
+                        DtResolution::PressSecond(key) => {
+                            // Double-tap detected! Press second action
+                            ProcessResult::EmitKey(key, true)
                         }
-                        DtResolution::SingleTap(key) => {
-                            // Timeout on first press (held too long)
+                        DtResolution::HoldFirst(key) => {
+                            // Held beyond tapping term - start holding first action
+                            ProcessResult::EmitKey(key, true)
+                        }
+                        DtResolution::TapFirst(key) => {
+                            // Single-tap timeout - emit first action as tap
                             ProcessResult::TapKeyPressRelease(key)
                         }
                         DtResolution::Undecided => {
-                            // Waiting for tap/double-tap decision
+                            // Still pending - no events for this key
                             ProcessResult::None
                         }
-                    }
+                        _ => ProcessResult::None,
+                    };
+
+                    self.combine_with_timeouts(dt_timeout_events.clone(), result)
                 } else {
                     // DT with complex actions not yet supported
                     warn!("DT with non-Key actions not yet supported");
@@ -484,12 +509,18 @@ impl KeymapProcessor {
 
                     actions.push(KeyAction::RegularKey(keycode));
                     self.held_keys.insert(keycode, actions);
-                    ProcessResult::MultipleEvents(events)
+                    self.combine_with_timeouts(
+                        dt_timeout_events,
+                        ProcessResult::MultipleEvents(events),
+                    )
                 } else {
                     // Pass through unchanged
                     actions.push(KeyAction::RegularKey(keycode));
                     self.held_keys.insert(keycode, actions);
-                    ProcessResult::EmitKey(keycode, true)
+                    self.combine_with_timeouts(
+                        dt_timeout_events,
+                        ProcessResult::EmitKey(keycode, true),
+                    )
                 }
             }
         }
@@ -541,15 +572,20 @@ impl KeymapProcessor {
                         // Let DT processor handle the release
                         let resolution = self.dt_processor.on_release(keycode);
                         match resolution {
-                            DtResolution::SingleTap(key) => {
-                                return ProcessResult::TapKeyPressRelease(key);
+                            DtResolution::ReleaseFirst(key) => {
+                                // Was holding first action - release it
+                                return ProcessResult::EmitKey(key, false);
                             }
-                            DtResolution::DoubleTap(_key) => {
-                                // Already emitted on second press
-                                return ProcessResult::None;
+                            DtResolution::ReleaseSecond(key) => {
+                                // Was holding second action (double-tap-hold) - release it
+                                return ProcessResult::EmitKey(key, false);
                             }
                             DtResolution::Undecided => {
-                                // Still waiting
+                                // Still in Pending or Tapped state, waiting
+                                return ProcessResult::None;
+                            }
+                            _ => {
+                                // Other resolutions shouldn't come from on_release
                                 return ProcessResult::None;
                             }
                         }
@@ -640,6 +676,70 @@ impl KeymapProcessor {
                 ProcessResult::MultipleEvents(vec![(key, true), (key, false)])
             }
             MtAction::ReleaseHold(key) => ProcessResult::EmitKey(key, false),
+        }
+    }
+
+    // === DT Helpers ===
+
+    /// Process DT timeout resolutions and return events to emit
+    fn process_dt_timeouts(&self, timeouts: Vec<(KeyCode, DtResolution)>) -> Vec<(KeyCode, bool)> {
+        let mut events = Vec::new();
+
+        for (_keycode, resolution) in timeouts {
+            match resolution {
+                DtResolution::HoldFirst(key) => {
+                    // Start holding first action
+                    events.push((key, true));
+                }
+                DtResolution::TapFirst(key) => {
+                    // Emit single-tap
+                    events.push((key, true));
+                    events.push((key, false));
+                }
+                _ => {
+                    // Other resolutions shouldn't come from check_timeouts
+                }
+            }
+        }
+
+        events
+    }
+
+    /// Combine DT timeout events with a ProcessResult
+    fn combine_with_timeouts(
+        &self,
+        timeout_events: Vec<(KeyCode, bool)>,
+        result: ProcessResult,
+    ) -> ProcessResult {
+        if timeout_events.is_empty() {
+            return result;
+        }
+
+        match result {
+            ProcessResult::None => {
+                if timeout_events.is_empty() {
+                    ProcessResult::None
+                } else {
+                    ProcessResult::MultipleEvents(timeout_events)
+                }
+            }
+            ProcessResult::EmitKey(key, pressed) => {
+                let mut all_events = timeout_events;
+                all_events.push((key, pressed));
+                ProcessResult::MultipleEvents(all_events)
+            }
+            ProcessResult::TapKeyPressRelease(key) => {
+                let mut all_events = timeout_events;
+                all_events.push((key, true));
+                all_events.push((key, false));
+                ProcessResult::MultipleEvents(all_events)
+            }
+            ProcessResult::MultipleEvents(mut events) => {
+                let mut all_events = timeout_events;
+                all_events.append(&mut events);
+                ProcessResult::MultipleEvents(all_events)
+            }
+            other => other, // Pass through TypeString etc unchanged
         }
     }
 
