@@ -255,6 +255,16 @@ pub enum Action {
     /// Format: SOCD(this_key, [opposing_keys...])
     /// Example: SOCD(KC_W, [KC_S]) or SOCD(KC_W, [KC_S, KC_DOWN])
     SOCD(KeyCode, Vec<KeyCode>),
+    /// OneShot Modifier - tap once, modifier stays active for next keypress only
+    /// Perfect for typing capital letters without holding shift
+    /// Format: OSM(modifier_key)
+    /// Example: OSM(KC_LSFT) - tap for one-shot shift, hold for normal shift
+    OSM(KeyCode),
+    /// Double-Tap action (QMK-style tap dance)
+    /// Single tap: performs first action, Double tap: performs second action
+    /// Format: DT(single_tap_action, double_tap_action)
+    /// Example: DT(KC_LALT, TO("nav")) - single tap for alt, double tap to toggle nav layer
+    DT(Box<Action>, Box<Action>),
     /// Run arbitrary shell command
     /// Example: CMD("/usr/bin/notify-send 'Hello'")
     CMD(String),
@@ -468,12 +478,19 @@ pub struct Config {
     #[serde(default = "default_true_bool")]
     pub per_keyboard_inherits_global_layout: bool,
 
-    /// Enable system notifications for config reload events (default: true)
-    /// When enabled, shows desktop notifications for:
-    /// - Successful config reloads
-    /// - Config reload errors with detailed error messages
+    /// Enable hotplug support - automatically detect and configure new keyboards (default: true)
+    /// When enabled, newly connected keyboards are automatically processed
+    /// When disabled, requires daemon restart to detect new keyboards
     #[serde(default = "default_true_bool")]
-    pub enable_notifications: bool,
+    pub enable_hotplug: bool,
+
+    /// Enable emergency escape mechanism (default: true)
+    /// When enabled, unplugging/replugging any keyboard 5 times within 25 seconds will:
+    /// - Stop all keyboard processing
+    /// - Exit the daemon gracefully
+    /// This is a safety feature to recover from broken configs that brick your keyboard
+    #[serde(default = "default_true_bool")]
+    pub enable_emergency_escape: bool,
 }
 
 fn default_tapping_term() -> u32 {
@@ -510,24 +527,34 @@ impl Config {
         let config = ron::from_str(&preprocessed).map_err(|e| {
             let error_msg = e.to_string();
 
-            // Provide helpful hints for common errors
-            if error_msg.contains("TO") || error_msg.contains("Layer") {
-                anyhow::anyhow!(
-                    "Config parsing error: {}\n\n\
-                    HINT: Layer switching syntax is: TO(\"layer_name\")\n\
-                    Example: KC_LALT: TO(\"nav\")",
-                    e
-                )
-            } else if error_msg.contains("MT") {
-                anyhow::anyhow!(
-                    "Config parsing error: {}\n\n\
-                    HINT: Mod-Tap syntax is: MT(tap_key, hold_key)\n\
-                    Example: KC_A: MT(KC_A, KC_LALT)",
-                    e
-                )
-            } else {
-                anyhow::anyhow!("Config parsing error: {}", e)
+            // If error is about KeyCode enum, clean it up
+            if error_msg.contains("enum `KeyCode`") {
+                // Extract the line number and invalid variant
+                if let Some(line_col) = error_msg.split(':').nth(0) {
+                    if let Some(variant_start) = error_msg.find("named `") {
+                        if let Some(variant_end) = error_msg[variant_start + 7..].find('`') {
+                            let invalid_variant =
+                                &error_msg[variant_start + 7..variant_start + 7 + variant_end];
+
+                            // Simple suggestion: look for similar KC_* patterns
+                            let suggestion = if invalid_variant.starts_with("KC_") {
+                                "Did you mean one of: KC_A, KC_B, KC_C, ... ?"
+                            } else {
+                                "Expected a KeyCode like: KC_A, KC_B, KC_ESC, KC_LSFT, etc."
+                            };
+
+                            return anyhow::anyhow!(
+                                "Config parsing error: {}: Unknown KeyCode `{}`\n{}",
+                                line_col,
+                                invalid_variant,
+                                suggestion
+                            );
+                        }
+                    }
+                }
             }
+
+            anyhow::anyhow!("Config parsing error: {}", e)
         })?;
         Ok(config)
     }
@@ -611,7 +638,8 @@ impl Config {
                     per_keyboard_overrides: HashMap::new(), // Don't nest overrides
                     hot_config_reload: self.hot_config_reload, // Keep global hot reload setting
                     per_keyboard_inherits_global_layout: self.per_keyboard_inherits_global_layout, // Keep global setting
-                    enable_notifications: self.enable_notifications, // Keep global notification setting
+                    enable_hotplug: self.enable_hotplug, // Keep global hotplug setting
+                    enable_emergency_escape: self.enable_emergency_escape, // Keep global emergency escape setting
                 }
             }
         } else {

@@ -379,15 +379,6 @@
     //   - Example: Global has home row mods, per-keyboard has traditional layout
     //
     per_keyboard_inherits_global_layout: true,
-    
-    // Enable system notifications for config reload events (default: true)
-    // When enabled, shows desktop notifications for:
-    //   - Config reload start: "Reloading configuration..." (low urgency)
-    //   - Successful reload: "Configuration reloaded successfully!" (low urgency)
-    //   - Reload errors: Shows the full error message (critical urgency)
-    // Useful for: Getting immediate feedback when hot reload triggers or when manual reload via IPC
-    // Set to false if you find notifications annoying
-    enable_notifications: true,
 
     // ============================================================================
     // PER-KEYBOARD OVERRIDES

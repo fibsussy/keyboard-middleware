@@ -343,6 +343,20 @@ impl KeymapProcessor {
                 // Run arbitrary command
                 ProcessResult::RunCommand(command.clone())
             }
+            Some(ConfigAction::OSM(_modifier_key)) => {
+                // OneShot Modifier - TODO: implement proper oneshot logic
+                // For now, pass through as regular key
+                actions.push(KeyAction::RegularKey(keycode));
+                self.held_keys.insert(keycode, actions);
+                ProcessResult::EmitKey(keycode, true)
+            }
+            Some(ConfigAction::DT(_single_tap, _double_tap)) => {
+                // Double-Tap action - TODO: implement proper tap dance logic
+                // For now, pass through as regular key
+                actions.push(KeyAction::RegularKey(keycode));
+                self.held_keys.insert(keycode, actions);
+                ProcessResult::EmitKey(keycode, true)
+            }
             None => {
                 // No remap - check if MT keys are pending (permissive hold)
                 let mt_resolutions = self.mt_processor.on_other_key_press(keycode);
