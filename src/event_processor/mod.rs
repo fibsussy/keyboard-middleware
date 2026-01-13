@@ -11,7 +11,19 @@ const SYN_CODE: u16 = 0;
 
 use crate::config::Config;
 use crate::keyboard_id::KeyboardId;
-use crate::keymap::{evdev_to_keycode, keycode_to_evdev, KeymapProcessor, ProcessResult};
+
+// Sub-modules in this directory
+pub mod actions;
+pub mod keymap;
+
+// Re-export for backwards compatibility
+pub use keymap::{evdev_to_keycode, keycode_to_evdev, KeymapProcessor, ProcessResult};
+
+// Internal use
+use keymap::{
+    evdev_to_keycode as evdev_to_kc, keycode_to_evdev as kc_to_evdev,
+    KeymapProcessor as KmProcessor, ProcessResult as ProcResult,
+};
 
 /// Process events from a physical keyboard and output to virtual device
 /// Returns immediately after spawning thread

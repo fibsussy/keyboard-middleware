@@ -29,9 +29,9 @@ pub enum DtState {
 pub struct DtKey {
     /// Physical keycode being tracked
     pub keycode: KeyCode,
-    /// Tap output (KeyCode for simple cases)
+    /// Tap output (KeyCode for now, will support Actions later)
     pub tap_key: KeyCode,
-    /// Double-tap output (KeyCode for simple cases)
+    /// Double-tap output (KeyCode for now, will support Actions later)
     pub double_tap_key: KeyCode,
     /// When first press occurred
     pub first_press_at: Instant,

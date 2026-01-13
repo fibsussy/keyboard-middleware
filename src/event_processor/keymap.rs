@@ -3,9 +3,12 @@ use std::collections::HashMap;
 use tracing::warn;
 
 use crate::config::{Action as ConfigAction, Config, KeyCode, Layer};
-use crate::doubletap::{DtConfig, DtProcessor, DtResolution};
-use crate::modtap::{MtAction, MtConfig as ModtapConfig, MtProcessor, MtResolution, RollingStats};
-use crate::oneshot::{OsmConfig, OsmProcessor, OsmResolution};
+
+// Import action processors from the actions submodule
+use super::actions::{
+    DtConfig, DtProcessor, DtResolution, MtAction, MtConfig as ModtapConfig, MtProcessor,
+    MtResolution, OsmConfig, OsmProcessor, OsmResolution, RollingStats,
+};
 
 /// What a key press is doing (recorded on press, replayed on release)
 #[derive(Debug, Clone)]

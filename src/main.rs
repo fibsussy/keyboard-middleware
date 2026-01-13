@@ -48,15 +48,11 @@ pub mod config;
 mod config_manager;
 mod daemon;
 mod debug;
-mod doubletap;
 mod event_processor;
 mod ipc;
 mod keyboard_id;
-mod keymap;
 mod list;
-mod modtap;
 mod niri;
-mod oneshot;
 mod session_manager;
 mod toggle;
 
@@ -330,7 +326,7 @@ fn clear_adaptive_stats() -> Result<()> {
 fn show_adaptive_stats(config_path: Option<&std::path::Path>) -> Result<()> {
     use colored::Colorize;
     use config::{Config, KeyCode};
-    use modtap::{MtConfig as ModtapConfig, MtProcessor};
+    use event_processor::actions::modtap::{MtConfig as ModtapConfig, MtProcessor};
 
     println!();
     println!(
@@ -392,8 +388,10 @@ fn show_adaptive_stats(config_path: Option<&std::path::Path>) -> Result<()> {
     let all_stats_path = config_path.parent().unwrap().join("all_key_stats.json");
     let stats = if all_stats_path.exists() {
         let json = std::fs::read_to_string(&all_stats_path).unwrap_or_default();
-        let stats_map: std::collections::HashMap<String, modtap::RollingStats> =
-            serde_json::from_str(&json).unwrap_or_default();
+        let stats_map: std::collections::HashMap<
+            String,
+            event_processor::actions::modtap::RollingStats,
+        > = serde_json::from_str(&json).unwrap_or_default();
 
         let mut result = Vec::new();
         for (key_str, stats) in stats_map {
