@@ -5,6 +5,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::Duration;
+use tokio::sync::mpsc::UnboundedSender;
 use tracing::{error, info, warn};
 
 /// Detect Niri socket with validation and fallback
@@ -109,7 +110,7 @@ fn get_focused_window_info() -> WindowInfo {
 
 /// Start monitoring niri window focus events
 /// Returns immediately after spawning the monitor thread
-pub fn start_niri_monitor(tx: Sender<NiriEvent>) {
+pub fn start_niri_monitor(tx: UnboundedSender<NiriEvent>) {
     // Detect socket before spawning thread
     let socket_path = if let Some(path) = detect_niri_socket() {
         path
@@ -172,6 +173,80 @@ pub fn start_niri_monitor(tx: Sender<NiriEvent>) {
                     }
                 }
             }
+
+            error!("Niri event stream ended, restarting in 5 seconds...");
+            thread::sleep(Duration::from_secs(5));
+        }
+    });
+}
+
+/// Start monitoring niri window focus events (sync version for standalone daemons)
+/// Returns immediately after spawning the monitor thread
+pub fn start_niri_monitor_sync(tx: Sender<NiriEvent>) {
+    // Detect socket before spawning thread
+    let socket_path = if let Some(path) = detect_niri_socket() {
+        path
+    } else {
+        error!("Cannot start niri monitor: no socket found");
+        return;
+    };
+
+    thread::spawn(move || {
+        // Set NIRI_SOCKET env for this thread
+        if std::env::var("NIRI_SOCKET").is_err() {
+            std::env::set_var("NIRI_SOCKET", &socket_path);
+        }
+
+        loop {
+            info!("Starting niri event stream monitor...");
+            info!("Watching for gamescope windows...");
+
+            let mut child = match Command::new("niri")
+                .args(["msg", "event-stream"])
+                .stdout(Stdio::piped())
+                .spawn()
+            {
+                Ok(child) => child,
+                Err(e) => {
+                    error!("Failed to spawn niri: {}", e);
+                    thread::sleep(Duration::from_secs(5));
+                    continue;
+                }
+            };
+
+            let Some(stdout) = child.stdout.take() else {
+                error!("Failed to capture niri stdout");
+                thread::sleep(Duration::from_secs(5));
+                continue;
+            };
+
+            let reader = BufReader::new(stdout);
+
+            for line in reader.lines() {
+                match line {
+                    Ok(line) => {
+                        if line.starts_with("Window focus changed:") {
+                            let window_info = get_focused_window_info();
+                            if let Some(ref app) = window_info.app_id {
+                                info!(
+                                    "Focus changed → app_id: {}, pid: {:?}",
+                                    app, window_info.pid
+                                );
+                            }
+                            if tx.send(NiriEvent::WindowFocusChanged(window_info)).is_err() {
+                                error!("Niri monitor: channel closed, exiting");
+                                return;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Error reading niri output: {}", e);
+                        break;
+                    }
+                }
+            }
+
+            let _ = child.wait();
 
             error!("Niri event stream ended, restarting in 5 seconds...");
             thread::sleep(Duration::from_secs(5));

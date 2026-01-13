@@ -41,7 +41,7 @@ fn main() -> Result<()> {
     let (niri_tx, niri_rx) = mpsc::channel();
 
     // Start niri monitor
-    niri::start_niri_monitor(niri_tx);
+    niri::start_niri_monitor_sync(niri_tx);
 
     // Track current game mode state to avoid sending redundant IPC requests
     let mut current_game_mode = false;
@@ -55,7 +55,10 @@ fn main() -> Result<()> {
                 // Only send IPC if state changed
                 if should_enable != current_game_mode {
                     current_game_mode = should_enable;
-                    info!("Game mode state changed: {}", if should_enable { "ENABLED" } else { "DISABLED" });
+                    info!(
+                        "Game mode state changed: {}",
+                        if should_enable { "ENABLED" } else { "DISABLED" }
+                    );
 
                     // Send IPC request to root daemon
                     match ipc::send_request(&ipc::IpcRequest::SetGameMode(should_enable)) {

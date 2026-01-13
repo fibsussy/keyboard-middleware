@@ -17,6 +17,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
+use tokio::sync::mpsc as tokio_mpsc;
 use tracing::{debug, error, info, warn};
 
 /// Metadata about a keyboard
@@ -86,10 +87,10 @@ impl AsyncDaemon {
         info!("Starting async keyboard middleware daemon (multi-user mode)");
 
         // Start background services
-        let hotplug_rx = self.start_hotplug_monitor();
-        let ipc_rx = self.start_ipc_server()?;
-        let niri_rx = self.start_niri_monitor();
-        let config_watch_rx = self.start_config_watcher();
+        let mut hotplug_rx = self.start_hotplug_monitor();
+        let mut ipc_rx = self.start_ipc_server()?;
+        let mut niri_rx = self.start_niri_monitor();
+        let mut config_watch_rx = self.start_config_watcher();
 
         // Initial session and keyboard discovery
         info!("Refreshing user sessions...");
@@ -105,30 +106,66 @@ impl AsyncDaemon {
         info!("Syncing keyboards to users...");
         self.sync_keyboards_to_users().await;
 
-        // Main event loop
-        let mut hotplug_check = tokio::time::interval(Duration::from_millis(100));
-        let mut ipc_check = tokio::time::interval(Duration::from_millis(10));
+        // Main event loop - use async recv for zero CPU usage when idle
         let mut session_check = tokio::time::interval(Duration::from_secs(5));
-        let mut niri_check = tokio::time::interval(Duration::from_millis(50));
-        let mut config_check = tokio::time::interval(Duration::from_millis(100));
+
+        // Hotplug debouncing: collect events and only process after quiet period
+        let mut hotplug_debounce: Option<tokio::time::Instant> = None;
+        let hotplug_debounce_duration = Duration::from_secs(1);
 
         loop {
             tokio::select! {
-                _ = hotplug_check.tick() => {
-                    self.handle_hotplug_events(&hotplug_rx).await;
+                Some(event) = hotplug_rx.recv() => {
+                    // Only process "add" and "remove" events to avoid reacting to every input event
+                    if event.contains(" add ") || event.contains(" remove ") {
+                        debug!("Hotplug event (add/remove): {}", event);
+                        // Set debounce timer - we'll process this after things quiet down
+                        hotplug_debounce = Some(tokio::time::Instant::now());
+                    }
                 }
-                _ = ipc_check.tick() => {
-                    self.handle_ipc_commands(&ipc_rx).await;
+                Some((request, resp_tx)) = ipc_rx.recv() => {
+                    debug!("IPC request: {:?}", request);
+                    let response = self.handle_ipc_request(request).await;
+                    let _ = resp_tx.send(response);
+                }
+                Some(event) = niri_rx.recv() => {
+                    self.process_niri_event(event).await;
+                }
+                Some(()) = config_watch_rx.recv() => {
+                    // Check if hot config reload is enabled for ANY user
+                    let mut hot_reload_enabled = false;
+                    for mgr in self.user_configs.values() {
+                        let config = mgr.get_config().await;
+                        if config.hot_config_reload {
+                            hot_reload_enabled = true;
+                            break;
+                        }
+                    }
+
+                    if hot_reload_enabled {
+                        info!("Config file changed, reloading...");
+                        if let Err(e) = self.reload_all_configs().await {
+                            error!("Config reload failed: {}", e);
+                        }
+                    }
                 }
                 _ = session_check.tick() => {
                     self.refresh_sessions().await;
                     self.sync_keyboards_to_users().await;
-                }
-                _ = niri_check.tick() => {
-                    self.handle_niri_events(&niri_rx).await;
-                }
-                _ = config_check.tick() => {
-                    self.handle_config_changes(&config_watch_rx).await;
+
+                    // Check if hotplug debounce timer expired
+                    if let Some(debounce_time) = hotplug_debounce {
+                        if debounce_time.elapsed() >= hotplug_debounce_duration {
+                            info!("Processing debounced hotplug events...");
+                            self.load_user_configs().await;
+                            if let Err(e) = self.discover_keyboards().await {
+                                error!("Failed to rediscover keyboards: {}", e);
+                            } else {
+                                self.sync_keyboards_to_users().await;
+                            }
+                            hotplug_debounce = None;
+                        }
+                    }
                 }
             }
         }
@@ -598,8 +635,8 @@ impl AsyncDaemon {
     }
 
     /// Start hotplug monitor (udev)
-    fn start_hotplug_monitor(&self) -> mpsc::Receiver<String> {
-        let (tx, rx) = mpsc::channel();
+    fn start_hotplug_monitor(&self) -> tokio_mpsc::UnboundedReceiver<String> {
+        let (tx, rx) = tokio_mpsc::unbounded_channel();
 
         thread::spawn(move || {
             loop {
@@ -635,8 +672,10 @@ impl AsyncDaemon {
     }
 
     /// Start IPC server
-    fn start_ipc_server(&self) -> Result<mpsc::Receiver<(IpcRequest, mpsc::Sender<IpcResponse>)>> {
-        let (tx, rx) = mpsc::channel();
+    fn start_ipc_server(
+        &self,
+    ) -> Result<tokio_mpsc::UnboundedReceiver<(IpcRequest, mpsc::Sender<IpcResponse>)>> {
+        let (tx, rx) = tokio_mpsc::unbounded_channel();
         let socket_path = get_root_socket_path();
 
         // Remove old socket if exists
@@ -715,8 +754,8 @@ impl AsyncDaemon {
     }
 
     /// Start niri window monitor
-    fn start_niri_monitor(&self) -> mpsc::Receiver<crate::niri::NiriEvent> {
-        let (tx, rx) = mpsc::channel();
+    fn start_niri_monitor(&self) -> tokio_mpsc::UnboundedReceiver<crate::niri::NiriEvent> {
+        let (tx, rx) = tokio_mpsc::unbounded_channel();
 
         if crate::niri::is_niri_available() {
             crate::niri::start_niri_monitor(tx);
@@ -730,11 +769,11 @@ impl AsyncDaemon {
 
     /// Start config file watcher for automatic reload
     /// Returns: Receiver<()> that signals when any config changed
-    fn start_config_watcher(&self) -> mpsc::Receiver<()> {
+    fn start_config_watcher(&self) -> tokio_mpsc::UnboundedReceiver<()> {
         use notify::{recommended_watcher, Event, EventKind, RecursiveMode, Watcher};
         use std::path::Path;
 
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = tokio_mpsc::unbounded_channel();
 
         thread::spawn(move || {
             let (watch_tx, watch_rx) = std::sync::mpsc::channel();
@@ -933,57 +972,36 @@ impl AsyncDaemon {
 
     /// Handle hotplug events
     #[allow(clippy::future_not_send)]
-    async fn handle_hotplug_events(&mut self, rx: &mpsc::Receiver<String>) {
-        while let Ok(event) = rx.try_recv() {
-            debug!("Hotplug event: {}", event);
-
-            // Reload config before handling the hotplug event
-            info!("Reloading configs before processing hotplug event...");
-            self.load_user_configs().await;
-
-            // Rediscover keyboards (updates all_keyboards metadata)
-            if let Err(e) = self.discover_keyboards().await {
-                error!("Failed to rediscover keyboards: {}", e);
-                continue;
-            }
-
-            // Sync keyboards to users (start/stop threads based on what changed)
-            self.sync_keyboards_to_users().await;
-        }
-    }
-
     /// Handle config file changes - triggers full reload (same as IPC)
     #[allow(clippy::future_not_send)]
-    async fn handle_config_changes(&mut self, rx: &mpsc::Receiver<()>) {
-        while rx.try_recv().is_ok() {
-            // Check if hot config reload is enabled for ANY user
-            let mut hot_reload_enabled = false;
-            for mgr in self.user_configs.values() {
-                let config = mgr.get_config().await;
-                if config.hot_config_reload {
-                    hot_reload_enabled = true;
-                    break;
-                }
+    async fn check_config_hot_reload(&mut self) {
+        // Check if hot config reload is enabled for ANY user
+        let mut hot_reload_enabled = false;
+        for mgr in self.user_configs.values() {
+            let config = mgr.get_config().await;
+            if config.hot_config_reload {
+                hot_reload_enabled = true;
+                break;
             }
+        }
 
-            if !hot_reload_enabled {
-                debug!("Config file changed, but hot_config_reload is disabled - ignoring");
-                continue;
-            }
+        if !hot_reload_enabled {
+            debug!("Config file changed, but hot_config_reload is disabled - ignoring");
+            return;
+        }
 
-            // Additional debouncing: ignore if we reloaded very recently
-            if let Some(last_reload) = self.last_config_reload {
-                if last_reload.elapsed() < Duration::from_millis(500) {
-                    debug!("Ignoring config change (too soon after last reload)");
-                    continue;
-                }
+        // Additional debouncing: ignore if we reloaded very recently
+        if let Some(last_reload) = self.last_config_reload {
+            if last_reload.elapsed() < Duration::from_millis(500) {
+                debug!("Ignoring config change (too soon after last reload)");
+                return;
             }
+        }
 
-            info!("Config file changed, triggering hot reload...");
-            self.last_config_reload = Some(std::time::Instant::now());
-            if let Err(e) = self.reload_all_configs().await {
-                error!("Auto-reload failed: {}", e);
-            }
+        info!("Config file changed, triggering hot reload...");
+        self.last_config_reload = Some(std::time::Instant::now());
+        if let Err(e) = self.reload_all_configs().await {
+            error!("Auto-reload failed: {}", e);
         }
     }
 
@@ -1089,126 +1107,113 @@ impl AsyncDaemon {
         Ok(())
     }
 
-    /// Handle IPC commands
+    /// Handle a single IPC request
     #[allow(clippy::future_not_send)]
-    async fn handle_ipc_commands(
-        &mut self,
-        rx: &mpsc::Receiver<(IpcRequest, mpsc::Sender<IpcResponse>)>,
-    ) {
-        while let Ok((request, resp_tx)) = rx.try_recv() {
-            debug!("IPC request: {:?}", request);
+    async fn handle_ipc_request(&mut self, request: IpcRequest) -> IpcResponse {
+        match request {
+            IpcRequest::Ping => IpcResponse::Pong,
+            IpcRequest::SetGameMode(enabled) => {
+                self.set_game_mode_all(enabled).await;
+                IpcResponse::Ok
+            }
+            IpcRequest::ListKeyboards => {
+                let keyboards = self
+                    .all_keyboards
+                    .iter()
+                    .map(|(id, meta)| {
+                        // Use first path as representative (for display)
+                        let device_path = meta
+                            .paths
+                            .first()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_default();
 
-            let response = match request {
-                IpcRequest::Ping => IpcResponse::Pong,
-                IpcRequest::SetGameMode(enabled) => {
-                    self.set_game_mode_all(enabled).await;
-                    IpcResponse::Ok
-                }
-                IpcRequest::ListKeyboards => {
-                    let keyboards = self
-                        .all_keyboards
-                        .iter()
-                        .map(|(id, meta)| {
-                            // Use first path as representative (for display)
-                            let device_path = meta
-                                .paths
-                                .first()
-                                .map(|p| p.display().to_string())
-                                .unwrap_or_default();
+                        // Keyboard is enabled if ANY of its event paths have active processors
+                        let enabled = meta
+                            .paths
+                            .iter()
+                            .any(|path| self.active_processors.contains_key(path));
 
-                            // Keyboard is enabled if ANY of its event paths have active processors
-                            let enabled = meta
-                                .paths
-                                .iter()
-                                .any(|path| self.active_processors.contains_key(path));
-
-                            crate::ipc::KeyboardInfo {
-                                hardware_id: id.to_string(),
-                                name: meta.name.clone(),
-                                device_path,
-                                enabled,
-                                connected: meta.connected,
-                            }
-                        })
-                        .collect();
-                    IpcResponse::KeyboardList(keyboards)
-                }
-                IpcRequest::ToggleKeyboards => {
-                    info!("Toggle keyboards requested via IPC");
-                    match self.reload_all_configs().await {
-                        Ok(()) => IpcResponse::Ok,
-                        Err(e) => {
-                            error!("Toggle reload failed: {}", e);
-                            IpcResponse::Error(format!("Toggle failed: {}", e))
+                        crate::ipc::KeyboardInfo {
+                            hardware_id: id.to_string(),
+                            name: meta.name.clone(),
+                            device_path,
+                            enabled,
+                            connected: meta.connected,
                         }
+                    })
+                    .collect();
+                IpcResponse::KeyboardList(keyboards)
+            }
+            IpcRequest::ToggleKeyboards => {
+                info!("Toggle keyboards requested via IPC");
+                match self.reload_all_configs().await {
+                    Ok(()) => IpcResponse::Ok,
+                    Err(e) => {
+                        error!("Toggle reload failed: {}", e);
+                        IpcResponse::Error(format!("Toggle failed: {}", e))
                     }
                 }
-                IpcRequest::EnableKeyboard(hardware_id) => {
-                    info!("Enable keyboard requested via IPC: {}", hardware_id);
-                    // Create KeyboardId from string
-                    let kbd_id = crate::keyboard_id::KeyboardId::new(hardware_id.clone());
-                    // Check if keyboard exists
-                    if self.all_keyboards.contains_key(&kbd_id) {
-                        // Find the first active user to assign to
-                        // In multi-user mode, we need to know which user's config to update
-                        // For now, we'll trigger a resync which will check all user configs
-                        info!("Keyboard {} found, triggering resync", hardware_id);
-                        self.sync_keyboards_to_users().await;
-                        IpcResponse::Ok
-                    } else {
-                        IpcResponse::Error(format!("Keyboard not found: {}", hardware_id))
-                    }
+            }
+            IpcRequest::EnableKeyboard(hardware_id) => {
+                info!("Enable keyboard requested via IPC: {}", hardware_id);
+                // Create KeyboardId from string
+                let kbd_id = crate::keyboard_id::KeyboardId::new(hardware_id.clone());
+                // Check if keyboard exists
+                if self.all_keyboards.contains_key(&kbd_id) {
+                    // Find the first active user to assign to
+                    // In multi-user mode, we need to know which user's config to update
+                    // For now, we'll trigger a resync which will check all user configs
+                    info!("Keyboard {} found, triggering resync", hardware_id);
+                    self.sync_keyboards_to_users().await;
+                    IpcResponse::Ok
+                } else {
+                    IpcResponse::Error(format!("Keyboard not found: {}", hardware_id))
                 }
-                IpcRequest::DisableKeyboard(hardware_id) => {
-                    info!("Disable keyboard requested via IPC: {}", hardware_id);
-                    // Create KeyboardId from string
-                    let kbd_id = crate::keyboard_id::KeyboardId::new(hardware_id.clone());
-                    // Stop all processors for this keyboard
-                    if let Err(e) = self.stop_processors_for_keyboard(&kbd_id).await {
-                        error!("Failed to stop processors: {}", e);
-                        IpcResponse::Error(format!("Failed to stop processors: {}", e))
-                    } else {
-                        self.keyboard_owners.remove(&kbd_id);
-                        IpcResponse::Ok
-                    }
-                }
-                IpcRequest::Reload => {
-                    info!("Config reload requested via IPC");
-                    match self.reload_all_configs().await {
-                        Ok(()) => IpcResponse::Ok,
-                        Err(e) => {
-                            error!("Config reload failed: {}", e);
-                            IpcResponse::Error(format!("Reload failed: {}", e))
-                        }
-                    }
-                }
-                IpcRequest::SaveAdaptiveStats => {
-                    info!("Save adaptive stats requested via IPC");
-                    self.save_adaptive_stats_all().await;
+            }
+            IpcRequest::DisableKeyboard(hardware_id) => {
+                info!("Disable keyboard requested via IPC: {}", hardware_id);
+                // Create KeyboardId from string
+                let kbd_id = crate::keyboard_id::KeyboardId::new(hardware_id.clone());
+                // Stop all processors for this keyboard
+                if let Err(e) = self.stop_processors_for_keyboard(&kbd_id).await {
+                    error!("Failed to stop processors: {}", e);
+                    IpcResponse::Error(format!("Failed to stop processors: {}", e))
+                } else {
+                    self.keyboard_owners.remove(&kbd_id);
                     IpcResponse::Ok
                 }
-                IpcRequest::Shutdown => {
-                    info!("Shutdown requested via IPC");
-                    // TODO: Implement graceful shutdown
-                    IpcResponse::Ok
+            }
+            IpcRequest::Reload => {
+                info!("Config reload requested via IPC");
+                match self.reload_all_configs().await {
+                    Ok(()) => IpcResponse::Ok,
+                    Err(e) => {
+                        error!("Config reload failed: {}", e);
+                        IpcResponse::Error(format!("Reload failed: {}", e))
+                    }
                 }
-            };
-
-            let _ = resp_tx.send(response);
+            }
+            IpcRequest::SaveAdaptiveStats => {
+                info!("Save adaptive stats requested via IPC");
+                self.save_adaptive_stats_all().await;
+                IpcResponse::Ok
+            }
+            IpcRequest::Shutdown => {
+                info!("Shutdown requested via IPC");
+                // TODO: Implement graceful shutdown
+                IpcResponse::Ok
+            }
         }
     }
 
-    /// Handle niri window focus events
-    #[allow(clippy::future_not_send)]
-    async fn handle_niri_events(&mut self, rx: &mpsc::Receiver<crate::niri::NiriEvent>) {
-        while let Ok(event) = rx.try_recv() {
-            match event {
-                crate::niri::NiriEvent::WindowFocusChanged(window_info) => {
-                    let should_enable = crate::niri::should_enable_gamemode(&window_info);
-
-                    debug!("Niri window focus changed, game mode: {}", should_enable);
-                    self.set_game_mode_all(should_enable).await;
-                }
+    /// Process a single niri event
+    async fn process_niri_event(&mut self, event: crate::niri::NiriEvent) {
+        match event {
+            crate::niri::NiriEvent::WindowFocusChanged(window_info) => {
+                let should_enable = crate::niri::should_enable_gamemode(&window_info);
+                debug!("Niri window focus changed, game mode: {}", should_enable);
+                self.set_game_mode_all(should_enable).await;
             }
         }
     }

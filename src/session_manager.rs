@@ -42,9 +42,9 @@ impl SessionManager {
     /// Update user session information from loginctl
     pub async fn refresh_sessions(&self) -> Result<()> {
         let sessions = list_user_sessions()?;
-        info!("Found {} user sessions from loginctl", sessions.len());
+        debug!("Found {} user sessions from loginctl", sessions.len());
         for s in &sessions {
-            info!(
+            debug!(
                 "  Session: uid={}, username={}, state={:?}",
                 s.uid, s.username, s.state
             );

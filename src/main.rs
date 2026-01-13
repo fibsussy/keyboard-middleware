@@ -807,7 +807,7 @@ fn run_niri_daemon() -> Result<()> {
     let (niri_tx, niri_rx) = mpsc::channel();
 
     // Start niri monitor
-    niri::start_niri_monitor(niri_tx);
+    niri::start_niri_monitor_sync(niri_tx);
 
     // Track current game mode state to avoid sending redundant IPC requests
     let mut current_game_mode = false;
