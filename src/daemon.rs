@@ -376,6 +376,26 @@ impl AsyncDaemon {
         self.session_manager.get_active_uids().await
     }
 
+    /// Get username from UID
+    fn get_username(&self, uid: u32) -> Result<String> {
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg(format!("getent passwd {} | cut -d: -f1", uid))
+            .output()?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!("Failed to get username for UID {}", uid));
+        }
+
+        let username = String::from_utf8(output.stdout)?.trim().to_string();
+
+        if username.is_empty() {
+            return Err(anyhow::anyhow!("Empty username for UID {}", uid));
+        }
+
+        Ok(username)
+    }
+
     /// Get user's home directory
     fn get_user_home_dir(&self, uid: u32) -> Result<PathBuf> {
         let output = Command::new("sh")
@@ -397,6 +417,45 @@ impl AsyncDaemon {
         }
 
         Ok(PathBuf::from(home))
+    }
+
+    /// Send desktop notification to a user
+    fn send_notification(&self, uid: u32, title: &str, message: &str, urgency: &str) {
+        info!("Attempting to send notification to user {}: {}", uid, title);
+
+        // Get username from UID
+        let username = match self.get_username(uid) {
+            Ok(name) => name,
+            Err(e) => {
+                error!("Failed to get username for UID {}: {}", uid, e);
+                return;
+            }
+        };
+
+        info!("Resolved UID {} to username: {}", uid, username);
+
+        match Command::new("runuser")
+            .args([
+                "-u",
+                &username,
+                "--",
+                "/usr/bin/notify-send",
+                "-u",
+                urgency,
+                title,
+                message,
+            ])
+            .spawn()
+        {
+            Ok(_) => info!(
+                "Sent {} notification to user {} ({}): {}",
+                urgency, username, uid, title
+            ),
+            Err(e) => error!(
+                "Failed to send notification to user {} ({}): {}",
+                username, uid, e
+            ),
+        }
     }
 
     /// Start event processors for ALL event files of a keyboard - ONE THREAD PER EVENT FILE!
@@ -932,24 +991,12 @@ impl AsyncDaemon {
     async fn reload_all_configs(&mut self) -> Result<()> {
         info!("Reloading all user configs...");
 
-        // Send notification to all users who own keyboards
-        let owner_uids: HashSet<u32> = self.keyboard_owners.values().copied().collect();
-        for uid in owner_uids {
-            let _ = std::process::Command::new("runuser")
-                .args([
-                    "-u",
-                    &uid.to_string(),
-                    "--",
-                    "/usr/bin/notify-send",
-                    "Keyboard Middleware",
-                    "Reloading configuration...",
-                ])
-                .spawn();
-        }
-
         // Step 1: Validate all configs before stopping anything
         info!("Validating configs...");
         let active_uids = self.get_active_user_uids().await;
+        info!("Active UIDs for validation: {:?}", active_uids);
+        let mut validation_errors: HashMap<u32, String> = HashMap::new();
+
         for &uid in &active_uids {
             let home_dir = match self.get_user_home_dir(uid) {
                 Ok(dir) => dir,
@@ -963,14 +1010,43 @@ impl AsyncDaemon {
                     Ok(cfg) => cfg,
                     Err(e) => {
                         error!("Config load failed for user {}: {}", uid, e);
-                        return Err(anyhow::anyhow!("Invalid config for user {}: {}", uid, e));
+                        let error_msg = format!("Config load failed: {}", e);
+                        validation_errors.insert(uid, error_msg);
+                        continue;
                     }
                 };
                 if let Err(e) = new_config.validate_silent() {
                     error!("Config validation failed for user {}: {}", uid, e);
-                    return Err(anyhow::anyhow!("Invalid config for user {}: {}", uid, e));
+                    let error_msg = format!("Config validation failed: {}", e);
+                    validation_errors.insert(uid, error_msg);
                 }
             }
+        }
+
+        // If any configs failed validation, send error notifications and abort reload
+        if !validation_errors.is_empty() {
+            info!(
+                "Sending error notifications to {} users",
+                validation_errors.len()
+            );
+
+            for (uid, error_msg) in &validation_errors {
+                info!("Sending error notification to user {}: {}", uid, error_msg);
+                self.send_notification(
+                    *uid,
+                    "Keyboard Middleware - Config Error",
+                    error_msg,
+                    "critical",
+                );
+            }
+
+            // Return first error for logging purposes
+            let first_error = validation_errors.iter().next().unwrap();
+            return Err(anyhow::anyhow!(
+                "Invalid config for user {}: {}",
+                first_error.0,
+                first_error.1
+            ));
         }
 
         // Step 2: Stop all processors
@@ -990,6 +1066,26 @@ impl AsyncDaemon {
         self.sync_keyboards_to_users().await;
 
         info!("Config reload complete!");
+
+        // Step 5: Send success notifications to users who own keyboards
+        let owner_uids: HashSet<u32> = self.keyboard_owners.values().copied().collect();
+        info!("Keyboard owners: {:?}", self.keyboard_owners);
+        info!(
+            "Sending success notifications to {} users: {:?}",
+            owner_uids.len(),
+            owner_uids
+        );
+
+        for uid in owner_uids {
+            info!("Sending notification to user {}", uid);
+            self.send_notification(
+                uid,
+                "Keyboard Middleware",
+                "Configuration reloaded successfully!",
+                "normal",
+            );
+        }
+
         Ok(())
     }
 
