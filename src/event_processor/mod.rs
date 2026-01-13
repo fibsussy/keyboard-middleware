@@ -20,10 +20,7 @@ pub mod keymap;
 pub use keymap::{evdev_to_keycode, keycode_to_evdev, KeymapProcessor, ProcessResult};
 
 // Internal use
-use keymap::{
-    evdev_to_keycode as evdev_to_kc, keycode_to_evdev as kc_to_evdev,
-    KeymapProcessor as KmProcessor, ProcessResult as ProcResult,
-};
+use keymap::{keycode_to_evdev as kc_to_evdev, ProcessResult as ProcResult};
 
 /// Process events from a physical keyboard and output to virtual device
 /// Returns immediately after spawning thread
@@ -277,7 +274,28 @@ fn run_event_processor(
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                // No events available - sleep briefly to avoid CPU spinning
+                // No events available - check for DT timeouts
+                // This allows hold detection to work even when no keys are being pressed
+                let timeout_result = keymap.check_dt_timeouts();
+                match timeout_result {
+                    ProcResult::MultipleEvents(events) => {
+                        // Emit timeout events (hold first action, single-tap, etc.)
+                        for (key, pressed) in events {
+                            let key_evdev = kc_to_evdev(key);
+                            let event = InputEvent::new_now(
+                                EventType::KEY,
+                                key_evdev.code(),
+                                i32::from(pressed),
+                            );
+                            virtual_device.emit(&[event])?;
+                        }
+                    }
+                    _ => {
+                        // No timeouts to process
+                    }
+                }
+
+                // Sleep briefly to avoid CPU spinning
                 // 1ms sleep provides excellent responsiveness while preventing busy-wait
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }

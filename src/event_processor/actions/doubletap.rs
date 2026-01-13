@@ -1,24 +1,28 @@
 /// Double-Tap (DT) processor - QMK-inspired tap dance with proper hold support
 ///
+/// Timing Model:
+/// - tapping_term_ms: How long to hold before first action activates as hold
+/// - double_tap_window_ms: Total window from first press to detect double-tap
+///
 /// State Machine:
-/// 1. Unpressed → Press → Pending (start timer)
+/// 1. Unpressed → Press → Pending (start timer from FIRST PRESS)
 /// 2. From Pending:
 ///    - Hold > tapping_term → Holding (emit/hold first action)
-///    - Release < tapping_term → Tapped (wait for second tap)
+///    - Release before tapping_term → Tapped (wait for second tap)
 /// 3. From Tapped:
-///    - Second press within window → DoubleTapping (emit second action)
-///    - Timeout expires → emit single-tap first action
+///    - Second press within double_tap_window (from FIRST PRESS!) → DoubleTapping
+///    - Timeout expires (double_tap_window from FIRST PRESS) → emit single-tap
 /// 4. From DoubleTapping:
 ///    - If held → continue holding second action
 ///    - If released → release second action
 /// 5. From Holding:
 ///    - On release → release first action
 ///
-/// Key differences from old implementation:
-/// - Uses tapping_term_ms (not double_tap_window_ms) for hold detection
-/// - First action can be held if you hold long enough
-/// - Second action can be held after double-tap
-/// - Single-tap properly emits after timeout
+/// Key behaviors:
+/// - ALL timing is measured from the FIRST PRESS (not from release!)
+/// - Single-tap emits when double_tap_window expires (even if no other key pressed)
+/// - Hold activates at tapping_term (typically < double_tap_window)
+/// - Double-tap must complete within double_tap_window from first press
 use crate::config::KeyCode;
 use std::collections::HashMap;
 use std::time::Instant;
@@ -142,14 +146,14 @@ impl DtProcessor {
         if let Some(dt_key) = self.tracked_keys.get_mut(&keycode) {
             // Already tracking this key - check if it's a second tap
             if dt_key.state == DtState::Tapped {
-                // Check if within double-tap window
-                if let Some(elapsed) = dt_key.elapsed_since_release() {
-                    if elapsed <= self.config.double_tap_window_ms as u128 {
-                        // Double-tap detected! Emit second action
-                        dt_key.state = DtState::DoubleTapping;
-                        dt_key.action_emitted = true;
-                        return DtResolution::PressSecond(dt_key.second_action_key);
-                    }
+                // Check if within double-tap window FROM FIRST PRESS (not release!)
+                // This matches QMK behavior - the entire double-tap sequence
+                // must happen within the double_tap_window_ms
+                if dt_key.elapsed_since_press() <= self.config.double_tap_window_ms as u128 {
+                    // Double-tap detected! Emit second action
+                    dt_key.state = DtState::DoubleTapping;
+                    dt_key.action_emitted = true;
+                    return DtResolution::PressSecond(dt_key.second_action_key);
                 }
             }
 
@@ -210,16 +214,18 @@ impl DtProcessor {
             match dt_key.state {
                 DtState::Pending => {
                     // Check if held beyond tapping term → transition to Holding
+                    // BUT: only if tapping_term < double_tap_window
+                    // This allows hold to activate while still in double-tap window
                     if dt_key.elapsed_since_press() > tapping_term {
                         transitions.push((*keycode, DtState::Holding));
                     }
                 }
                 DtState::Tapped => {
                     // Check if double-tap window expired → emit single-tap
-                    if let Some(elapsed) = dt_key.elapsed_since_release() {
-                        if elapsed > double_tap_window {
-                            transitions.push((*keycode, DtState::Tapped)); // Mark for cleanup
-                        }
+                    // Use elapsed_since_press() for consistency - the entire interaction
+                    // must complete within double_tap_window_ms
+                    if dt_key.elapsed_since_press() > double_tap_window {
+                        transitions.push((*keycode, DtState::Tapped)); // Mark for cleanup
                     }
                 }
                 _ => {}

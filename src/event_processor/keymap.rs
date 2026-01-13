@@ -188,6 +188,23 @@ impl KeymapProcessor {
         self.mt_processor.set_game_mode(active);
     }
 
+    /// Check for DT timeouts and return events to emit
+    /// Should be called periodically (e.g., every 1ms in the idle loop)
+    /// Returns ProcessResult that can be emitted directly
+    pub fn check_dt_timeouts(&mut self) -> ProcessResult {
+        let timeouts = self.dt_processor.check_timeouts();
+        if timeouts.is_empty() {
+            ProcessResult::None
+        } else {
+            let events = self.process_dt_timeouts(timeouts);
+            if events.is_empty() {
+                ProcessResult::None
+            } else {
+                ProcessResult::MultipleEvents(events)
+            }
+        }
+    }
+
     /// Get all currently held keys (for graceful shutdown)
     pub fn get_held_keys(&self) -> Vec<KeyCode> {
         self.held_keys.keys().copied().collect()
@@ -543,6 +560,17 @@ impl KeymapProcessor {
             }
         }
 
+        // Check DT timeouts on release too
+        // This is CRITICAL - without this, single-taps never emit!
+        let dt_timeout_events = {
+            let timeouts = self.dt_processor.check_timeouts();
+            if !timeouts.is_empty() {
+                self.process_dt_timeouts(timeouts)
+            } else {
+                Vec::new()
+            }
+        };
+
         if let Some(actions) = self.held_keys.remove(&keycode) {
             let mut events = Vec::new();
 
@@ -571,24 +599,25 @@ impl KeymapProcessor {
                     KeyAction::DtManaged => {
                         // Let DT processor handle the release
                         let resolution = self.dt_processor.on_release(keycode);
-                        match resolution {
+                        let result = match resolution {
                             DtResolution::ReleaseFirst(key) => {
                                 // Was holding first action - release it
-                                return ProcessResult::EmitKey(key, false);
+                                ProcessResult::EmitKey(key, false)
                             }
                             DtResolution::ReleaseSecond(key) => {
                                 // Was holding second action (double-tap-hold) - release it
-                                return ProcessResult::EmitKey(key, false);
+                                ProcessResult::EmitKey(key, false)
                             }
                             DtResolution::Undecided => {
                                 // Still in Pending or Tapped state, waiting
-                                return ProcessResult::None;
+                                ProcessResult::None
                             }
                             _ => {
                                 // Other resolutions shouldn't come from on_release
-                                return ProcessResult::None;
+                                ProcessResult::None
                             }
-                        }
+                        };
+                        return self.combine_with_timeouts(dt_timeout_events.clone(), result);
                     }
                     KeyAction::OsmManaged => {
                         // Let OSM processor handle the release
