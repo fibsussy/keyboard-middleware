@@ -401,6 +401,12 @@ pub struct MtConfig {
     /// Auto-save adaptive stats interval in seconds (default: 30)
     #[serde(default = "default_auto_save_interval")]
     pub auto_save_interval_secs: u32,
+
+    /// When holding an MT key and doing nothing, emit tap on release (default: true)
+    /// If true, holding then releasing without other action sends the tap key
+    /// If false, holding then releasing without other action does nothing
+    #[serde(default = "default_true")]
+    pub hold_do_nothing_emits_tap: bool,
 }
 
 fn default_ema_alpha() -> f32 {
@@ -449,6 +455,7 @@ impl Default for MtConfig {
             pause_learning_in_game_mode: true,
             ema_alpha: 0.02,
             auto_save_interval_secs: 30,
+            hold_do_nothing_emits_tap: true,
         }
     }
 }

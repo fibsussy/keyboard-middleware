@@ -114,6 +114,12 @@
         // Higher = less frequent saves, more data loss on crash
         // Recommended: 30 seconds
         auto_save_interval_secs: 30,
+        
+        // Hold-do-nothing-emits-tap: emit tap when holding then releasing without other action
+        // - true: Hold then release sends the tap key (QMK-inspired behavior)
+        // - false: Hold then release does nothing
+        // Recommended: true
+        hold_do_nothing_emits_tap: true,
     ),
 
     // ============================================================================

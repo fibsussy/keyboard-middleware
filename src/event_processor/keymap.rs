@@ -151,6 +151,7 @@ impl KeymapProcessor {
             double_tap_window_ms: config.mt_config.double_tap_window_ms,
             cross_hand_unwrap: config.mt_config.cross_hand_unwrap,
             adaptive_target_margin_ms: config.mt_config.adaptive_target_margin_ms,
+            hold_do_nothing_emits_tap: config.mt_config.hold_do_nothing_emits_tap,
         };
 
         // Build DT processor config

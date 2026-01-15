@@ -184,6 +184,11 @@ pub struct MtConfig {
     /// Target margin (ms) to keep threshold above average tap duration
     /// Default: 30ms means threshold = avg_tap + 30ms
     pub adaptive_target_margin_ms: u32,
+
+    /// When holding an MT key and doing nothing, emit tap on release
+    /// If true, holding then releasing without other action sends the tap key
+    /// If false, holding then releasing without other action does nothing
+    pub hold_do_nothing_emits_tap: bool,
 }
 
 impl Default for MtConfig {
@@ -203,6 +208,7 @@ impl Default for MtConfig {
             double_tap_window_ms: 300,
             cross_hand_unwrap: true,
             adaptive_target_margin_ms: 30,
+            hold_do_nothing_emits_tap: true,
         }
     }
 }
@@ -523,7 +529,33 @@ impl MtProcessor {
                 duration_ms >= effective_threshold
             };
 
-            if should_hold {
+            // Check if we should emit tap instead of hold when held past threshold
+            let is_hold_timing = duration_ms >= effective_threshold;
+            let emit_tap_on_hold_timeout = is_hold_timing
+                && self.config.hold_do_nothing_emits_tap
+                && mt_key.hold_intent_score <= 0.5; // No strong intent for hold
+
+            if emit_tap_on_hold_timeout {
+                // Hold-do-nothing-emits-tap: emit tap even though held past threshold
+                // Record tap time for double-tap detection
+                if self.config.double_tap_then_hold {
+                    self.last_tap_time.insert(keycode, Instant::now());
+                }
+
+                // Record ONLY taps (below threshold) for adaptive timing
+                // This prevents survivorship bias - only successful taps are tracked
+                // Skip recording when game mode is active
+                if self.config.adaptive_timing && !self.game_mode_active {
+                    self.update_tap_stats(keycode, duration_ms as f32);
+                }
+
+                let resolution = MtResolution {
+                    keycode,
+                    action: MtAction::TapPressRelease(mt_key.tap_key),
+                };
+
+                Some(resolution)
+            } else if should_hold {
                 // Hold: emit modifier press and release
                 let resolution = MtResolution {
                     keycode,
