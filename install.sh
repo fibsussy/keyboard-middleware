@@ -80,6 +80,23 @@ if [ -f "$START_DIR/PKGBUILD" ] && [ -f "$START_DIR/Cargo.toml" ] && [ -z "$VERS
         } | tar -czf - -T - | (cd "$TMP_DIR" && tar xzf -)
         
         cd "$TMP_DIR"
+        
+        # Check for unstaged changes and append +wip to version if needed
+        # Check from original source directory, not temp directory
+        cd "$START_DIR"
+        if ! git diff --quiet || ! git diff --cached --quiet 2>/dev/null; then
+            echo "Detected unstaged changes, appending +wip to version..."
+            # Modify version in Cargo.toml to include +wip
+            sed -i 's/^version = "\([^"]*\)"/version = "\1+wip"/' "$TMP_DIR/Cargo.toml"
+            # Remove Cargo.lock to let Cargo regenerate it with new version
+            rm -f "$TMP_DIR/Cargo.lock"
+            # Remove --locked flag from PKGBUILD to allow Cargo to update lock file
+            sed -i 's/cargo build --release --locked/cargo build --release/' "$TMP_DIR/PKGBUILD"
+            # Append +wip to PKGBUILD version field
+            sed -i 's/^pkgver=.*/&+wip/' "$TMP_DIR/PKGBUILD"
+        fi
+        cd "$TMP_DIR"
+        
         echo "Building package as normal user..."
         makepkg
 
