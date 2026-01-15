@@ -7,30 +7,54 @@ show_help() {
     cat <<EOF_HELP
 Keyboard Middleware Installer
 
-Usage: $0 [OPTION]
+Usage: $0 [OPTION] [VERSION]
 
 Options:
   local     Build from source (default if in repo)
   bin       Install precompiled binary
+  -v, --version VERSION  Install specific git tag/version
   --help    Show this help message
+
+Examples:
+  $0 local            # Build from local source
+  $0 bin              # Install latest binary
+  $0 -v v1.2.0        # Install version v1.2.0 from source
+  $0 bin -v v1.2.0    # Install version v1.2.0 binary
 EOF_HELP
     exit 0
 }
 
 MODE=""
-if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
-    show_help
-elif [ "${1:-}" = "remote" ]; then
-    MODE="bin"
-elif [ "${1:-}" = "bin" ]; then
-    MODE="bin"
-elif [ "${1:-}" = "local" ]; then
-    MODE="local"
-fi
+VERSION=""
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --help|-h)
+            show_help
+            ;;
+        -v|--version)
+            VERSION="$2"
+            shift 2
+            ;;
+        local)
+            MODE="local"
+            shift
+            ;;
+        bin|remote)
+            MODE="bin"
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1"
+            show_help
+            ;;
+    esac
+done
 
 START_DIR=$(pwd)
 
-if [ -f "$START_DIR/PKGBUILD" ] && [ -f "$START_DIR/Cargo.toml" ]; then
+if [ -f "$START_DIR/PKGBUILD" ] && [ -f "$START_DIR/Cargo.toml" ] && [ -z "$VERSION" ]; then
     echo "Detected local repository..."
     [ -z "$MODE" ] && MODE="local"
 
@@ -69,12 +93,59 @@ else
     TMP_DIR=$(mktemp -d)
     trap 'rm -rf "$TMP_DIR"' EXIT
     cd "$TMP_DIR"
-    if [ "$MODE" = "bin" ]; then
-        curl -fsSL -o PKGBUILD "https://raw.githubusercontent.com/fibsussy/keyboard-middleware/main/PKGBUILD.bin"
-        curl -fsSL -o keyboard-middleware.install "https://raw.githubusercontent.com/fibsussy/keyboard-middleware/main/keyboard-middleware.install"
+        if [ "$MODE" = "bin" ]; then
+            if [ -n "$VERSION" ]; then
+                # Try exact match first, then find newest matching version
+                if curl -fsSL "https://raw.githubusercontent.com/fibsussy/keyboard-middleware/$VERSION/PKGBUILD.bin" >/dev/null 2>&1; then
+                    curl -fsSL -o PKGBUILD "https://raw.githubusercontent.com/fibsussy/keyboard-middleware/$VERSION/PKGBUILD.bin"
+                    curl -fsSL -o keyboard-middleware.install "https://raw.githubusercontent.com/fibsussy/keyboard-middleware/$VERSION/keyboard-middleware.install"
+                else
+                    echo "Finding newest version matching $VERSION..."
+                    LATEST_TAG=$(git ls-remote --tags https://github.com/fibsussy/keyboard-middleware.git \
+                        | grep "refs/tags/.*$VERSION" \
+                        | sed 's|.*/\(.*\)|\1|' \
+                        | sort -V \
+                        | tail -n1)
+                    if [ -n "$LATEST_TAG" ]; then
+                        echo "Using version: $LATEST_TAG"
+                        curl -fsSL -o PKGBUILD "https://raw.githubusercontent.com/fibsussy/keyboard-middleware/$LATEST_TAG/PKGBUILD.bin"
+                        curl -fsSL -o keyboard-middleware.install "https://raw.githubusercontent.com/fibsussy/keyboard-middleware/$LATEST_TAG/keyboard-middleware.install"
+                    else
+                        echo "Error: No version found matching $VERSION"
+                        exit 1
+                    fi
+                fi
+            else
+                curl -fsSL -o PKGBUILD "https://raw.githubusercontent.com/fibsussy/keyboard-middleware/main/PKGBUILD.bin"
+                curl -fsSL -o keyboard-middleware.install "https://raw.githubusercontent.com/fibsussy/keyboard-middleware/main/keyboard-middleware.install"
+            fi
     else
-        git clone https://github.com/fibsussy/keyboard-middleware.git repo
-        cd repo
+        if [ -n "$VERSION" ]; then
+            # Try exact match first
+            if git ls-remote --tags https://github.com/fibsussy/keyboard-middleware.git | grep -q "refs/tags/$VERSION$"; then
+                git -c advice.detachedHead=false clone --branch "$VERSION" https://github.com/fibsussy/keyboard-middleware.git repo
+                cd repo
+            else
+                # Find newest matching version
+                echo "Finding newest version matching $VERSION..."
+                LATEST_TAG=$(git ls-remote --tags https://github.com/fibsussy/keyboard-middleware.git \
+                    | grep "refs/tags/.*$VERSION" \
+                    | sed 's|.*/\(.*\)|\1|' \
+                    | sort -V \
+                    | tail -n1)
+                if [ -n "$LATEST_TAG" ]; then
+                    echo "Using version: $LATEST_TAG"
+                    git -c advice.detachedHead=false clone --branch "$LATEST_TAG" https://github.com/fibsussy/keyboard-middleware.git repo
+                    cd repo
+                else
+                    echo "Error: No version found matching $VERSION"
+                    exit 1
+                fi
+            fi
+        else
+            git clone https://github.com/fibsussy/keyboard-middleware.git repo
+            cd repo
+        fi
         curl -fsSL -o PKGBUILD "https://raw.githubusercontent.com/fibsussy/keyboard-middleware/main/PKGBUILD"
         curl -fsSL -o keyboard-middleware.install "https://raw.githubusercontent.com/fibsussy/keyboard-middleware/main/keyboard-middleware.install"
     fi
