@@ -47,7 +47,9 @@ pub fn get_user_home_dir(uid: u32) -> anyhow::Result<PathBuf> {
 pub mod config;
 mod config_manager;
 mod daemon;
+mod daemon_display;
 mod debug;
+mod display;
 mod event_processor;
 mod ipc;
 mod keyboard_id;

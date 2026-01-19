@@ -1,6 +1,8 @@
 #![allow(clippy::pedantic)]
 
 pub mod config;
+pub mod daemon_display;
+pub mod display;
 pub mod event_processor;
 pub mod ipc;
 pub mod keyboard_id;
