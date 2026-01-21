@@ -35,13 +35,15 @@ jobs:
           else
             cargo bump patch
           fi
-          NEW_VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "keyboard-middleware") | .version')
+          NEW_VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "keymux") | .version')
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
           cargo check
       - name: Bump PKGBUILD versions
         run: |
-          sed -i "s/pkgver=.*/pkgver=${{ steps.bump.outputs.new_version }}/" PKGBUILD
-          sed -i "s/pkgver=.*/pkgver=${{ steps.bump.outputs.new_version }}/" PKGBUILD.bin
+          sed -i "s/pkgver=.*/pkgver=${{ steps.bump.outputs.new_version }}+()/" PKGBUILD
+          sed -i "s/pkgver=.*/pkgver=${{ steps.bump.outputs.new_version }}+bin/" PKGBUILD-bin
+          sed -i "s/pkgver=.*/pkgver=${{ steps.bump.outputs.new_version }}+git/" PKGBUILD-git
+          sed -i "s|git+https://github.com/fibsussy/keymux.git#tag=v.*|git+https://github.com/fibsussy/keymux.git#tag=v${{ steps.bump.outputs.new_version }}|" PKGBUILD
       - name: Upload version files (uncommitted)
         uses: actions/upload-artifact@v4
         with:
@@ -50,7 +52,8 @@ jobs:
             Cargo.toml
             Cargo.lock
             PKGBUILD
-            PKGBUILD.bin
+            PKGBUILD-bin
+            PKGBUILD-git
 
   # Build with bumped version (but not committed yet)
   build:
@@ -76,17 +79,21 @@ jobs:
         run: cross build --release --target ${{ matrix.arch }}-unknown-${{ matrix.os }}-gnu
       - name: Create tarball
         run: |
-          mv target/${{ matrix.arch }}-unknown-${{ matrix.os }}-gnu/release/keyboard-middleware keyboard-middleware
-          tar -czf keyboard-middleware-${{ matrix.os }}-${{ matrix.arch }}.tar.gz keyboard-middleware
+          mkdir -p keymux-${{ needs.version.outputs.new_version }}-${{ matrix.arch }}
+          mv target/${{ matrix.arch }}-unknown-${{ matrix.os }}-gnu/release/keymux keymux-${{ needs.version.outputs.new_version }}-${{ matrix.arch }}/
+          mv target/${{ matrix.arch }}-unknown-${{ matrix.os }}-gnu/release/keymux-niri keymux-${{ needs.version.outputs.new_version }}-${{ matrix.arch }}/ 2>/dev/null || true
+          cp keymux.service keymux-niri.service keymux-${{ needs.version.outputs.new_version }}-${{ matrix.arch }}/ 2>/dev/null || true
+          cp README.md LICENSE config.example.ron keymux-${{ needs.version.outputs.new_version }}-${{ matrix.arch }}/ 2>/dev/null || true
+          tar -czf keymux-${{ needs.version.outputs.new_version }}-${{ matrix.arch }}.tar.gz -C keymux-${{ needs.version.outputs.new_version }}-${{ matrix.arch }} .
       - name: Generate checksum
-        run: sha256sum keyboard-middleware-${{ matrix.os }}-${{ matrix.arch }}.tar.gz > keyboard-middleware-${{ matrix.os }}-${{ matrix.arch }}.sha256
+        run: sha256sum keymux-${{ needs.version.outputs.new_version }}-${{ matrix.arch }}.tar.gz > keymux-${{ needs.version.outputs.new_version }}-${{ matrix.arch }}.sha256
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: keyboard-middleware-${{ matrix.os }}-${{ matrix.arch }}
+          name: keymux-${{ needs.version.outputs.new_version }}-${{ matrix.arch }}
           path: |
-            keyboard-middleware-${{ matrix.os }}-${{ matrix.arch }}.tar.gz
-            keyboard-middleware-${{ matrix.os }}-${{ matrix.arch }}.sha256
+            keymux-${{ matrix.os }}-${{ matrix.arch }}.tar.gz
+            keymux-${{ matrix.os }}-${{ matrix.arch }}.sha256
 
   # Only after ALL builds succeed, commit version and create release
   commit-and-release:
@@ -105,12 +112,13 @@ jobs:
           cp artifacts/version-files/Cargo.toml .
           cp artifacts/version-files/Cargo.lock .
           cp artifacts/version-files/PKGBUILD .
-          cp artifacts/version-files/PKGBUILD.bin .
+          cp artifacts/version-files/PKGBUILD-bin .
+          cp artifacts/version-files/PKGBUILD-git .
       - name: Commit version bump and create tag
         run: |
           git config user.name "GitHub Action"
           git config user.email "action@github.com"
-          git add Cargo.toml Cargo.lock PKGBUILD PKGBUILD.bin
+          git add Cargo.toml Cargo.lock PKGBUILD PKGBUILD-bin PKGBUILD-git
           git commit -m "chore: bump version to v${{ needs.version.outputs.new_version }}" || echo "No changes to commit"
           git tag "v${{ needs.version.outputs.new_version }}" -f
           git push origin main
@@ -125,9 +133,9 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            artifacts/keyboard-middleware-linux-x86_64/keyboard-middleware-linux-x86_64.tar.gz
-            artifacts/keyboard-middleware-linux-x86_64/keyboard-middleware-linux-x86_64.sha256
-            artifacts/keyboard-middleware-linux-aarch64/keyboard-middleware-linux-aarch64.tar.gz
-            artifacts/keyboard-middleware-linux-aarch64/keyboard-middleware-linux-aarch64.sha256
+            artifacts/keymux-${{ needs.version.outputs.new_version }}-x86_64/keymux-${{ needs.version.outputs.new_version }}-x86_64.tar.gz
+            artifacts/keymux-${{ needs.version.outputs.new_version }}-x86_64/keymux-${{ needs.version.outputs.new_version }}-x86_64.sha256
+            artifacts/keymux-${{ needs.version.outputs.new_version }}-aarch64/keymux-${{ needs.version.outputs.new_version }}-aarch64.tar.gz
+            artifacts/keymux-${{ needs.version.outputs.new_version }}-aarch64/keymux-${{ needs.version.outputs.new_version }}-aarch64.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

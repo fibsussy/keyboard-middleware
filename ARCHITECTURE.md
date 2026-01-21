@@ -260,8 +260,8 @@ remaps: {
 
 **Manual toggle:**
 ```bash
-keyboard-middleware gamemode on   # Enable
-keyboard-middleware gamemode off  # Disable  
+keymux gamemode on   # Enable
+keymux gamemode off  # Disable  
 ```
 
 **Configuration:**
@@ -1556,7 +1556,7 @@ After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/keyboard-middleware daemon
+ExecStart=/usr/bin/keymux daemon
 Restart=always
 RestartSec=5
 User=root
@@ -1565,13 +1565,13 @@ User=root
 WantedBy=multi-user.target
 
 # User daemon service
-sudo cp target/release/keyboard-middleware /usr/local/bin/
+sudo cp target/release/keymux /usr/local/bin/
 sudo systemctl --user daemon-reload
-sudo systemctl --user enable --now keyboard-middleware.service
+sudo systemctl --user enable --now keymux.service
 
 # Root daemon (optional, for system-wide keyboards)
 sudo systemctl daemon-reload
-sudo systemctl enable --now keyboard-middleware.service
+sudo systemctl enable --now keymux.service
 
 # Setup complete
 
@@ -1583,7 +1583,7 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/keyboard-middleware daemon --user %i
+ExecStart=/usr/bin/keymux daemon --user %i
 Restart=on-failure
 User=%i
 

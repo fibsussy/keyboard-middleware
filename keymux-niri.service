@@ -1,12 +1,12 @@
 [Unit]
 Description=Keyboard Middleware Niri Window Watcher
-Documentation=https://github.com/fibsussy/keyboard-middleware
+Documentation=https://github.com/fibsussy/keymux
 After=graphical-session.target
 Requires=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/keyboard-middleware niri-daemon
+ExecStart=/usr/bin/keymux niri-daemon
 Restart=on-failure
 RestartSec=5
 Environment="RUST_LOG=info"

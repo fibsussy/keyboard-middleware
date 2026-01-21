@@ -8,7 +8,7 @@
 *.pkg.tar.zst
 *.pkg.tar.xz
 *.tar.gz
-keyboard-middleware-linux-*
+keymux-linux-*
 
 # Configuration files
 config.toml

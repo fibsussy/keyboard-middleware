@@ -1,10 +1,10 @@
 [package]
-name = "keyboard-middleware"
+name = "keymux"
 version = "0.12.1"
 edition = "2021"
 
 [[bin]]
-name = "keyboard-middleware"
+name = "keymux"
 path = "src/main.rs"
 
 [dependencies]
@@ -59,6 +59,6 @@ opt-level = 3
 #
 # Run with:
 # 1. RUSTFLAGS="-Cprofile-generate=/tmp/pgo-data" cargo build --release
-# 2. ./target/release/keyboard-middleware  # Use normally to generate profile
+# 2. ./target/release/keymux  # Use normally to generate profile
 # 3. llvm-profdata merge -o /tmp/pgo-data/merged.profdata /tmp/pgo-data
 # 4. RUSTFLAGS="-Cprofile-use=/tmp/pgo-data/merged.profdata" cargo build --release

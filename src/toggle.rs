@@ -142,7 +142,7 @@ pub fn run_toggle() -> Result<()> {
             println!(
                 "  {} Start it with: {}",
                 "Tip:".bright_yellow().bold(),
-                "sudo systemctl start keyboard-middleware".dimmed()
+                "sudo systemctl start keymux".dimmed()
             );
         }
     }

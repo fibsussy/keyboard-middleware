@@ -136,7 +136,7 @@ impl DaemonDisplay {
         println!("  Error: {}", e.to_string().dimmed());
         println!(
             "  Start: {}",
-            "sudo systemctl start keyboard-middleware".bright_white()
+            "sudo systemctl start keymux".bright_white()
         );
     }
 }

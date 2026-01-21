@@ -18,7 +18,7 @@ pub fn run_debug() -> Result<()> {
     println!("  PID: {}", std::process::id().to_string().bright_white());
     println!("  Thread ID: {:?}", std::thread::current().id());
 
-    let (actual_uid, is_sudo) = keyboard_middleware::get_actual_user_uid();
+    let (actual_uid, is_sudo) = crate::get_actual_user_uid();
 
     if is_sudo {
         println!(

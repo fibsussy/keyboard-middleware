@@ -12,7 +12,7 @@ mod niri;
 mod window;
 
 /// Niri window watcher daemon that monitors window focus changes
-/// and sends game mode updates to the root keyboard-middleware daemon via IPC
+/// and sends game mode updates to the root keymux daemon via IPC
 fn main() -> Result<()> {
     // Initialize logging
     tracing_subscriber::fmt()
@@ -21,7 +21,7 @@ fn main() -> Result<()> {
         .with_level(true)
         .init();
 
-    info!("Starting keyboard-middleware-niri watcher");
+    info!("Starting keymux-niri watcher");
 
     // Check if automatic game mode detection is enabled
     if !config::GameMode::auto_detect_enabled() {
@@ -86,7 +86,7 @@ fn main() -> Result<()> {
                                     }
                                     Err(e) => {
                                         error!("Failed to send game mode update to daemon: {}", e);
-                                        error!("Is keyboard-middleware daemon running?");
+                                        error!("Is keymux daemon running?");
                                     }
                                 }
                             }
@@ -119,7 +119,7 @@ fn main() -> Result<()> {
                         }
                         Err(e) => {
                             error!("Failed to send game mode update to daemon: {}", e);
-                            error!("Is keyboard-middleware daemon running?");
+                            error!("Is keymux daemon running?");
                         }
                     }
                 }

@@ -64,7 +64,7 @@ impl AsyncDaemon {
         let is_root = unsafe { libc::getuid() } == 0;
         if !is_root {
             return Err(anyhow::anyhow!(
-                "Daemon must run as root for device access. Use 'sudo systemctl start keyboard-middleware'"
+                "Daemon must run as root for device access. Use 'sudo systemctl start keymux'"
             ));
         }
 
@@ -390,7 +390,7 @@ impl AsyncDaemon {
                 }
             };
 
-            let config_path = home_dir.join(".config/keyboard-middleware/config.ron");
+            let config_path = home_dir.join(".config/keymux/config.ron");
 
             // Load user's config
             match ConfigManager::new(config_path.clone()) {
@@ -885,11 +885,11 @@ impl AsyncDaemon {
                 info!("Watching config at {:?}{}", config_path, symlink_info);
             }
 
-            // Scan for users with keyboard-middleware configs
+            // Scan for users with keymux configs
             if let Ok(entries) = std::fs::read_dir("/home") {
                 for entry in entries.flatten() {
                     let home_dir = entry.path();
-                    let config_dir = home_dir.join(".config/keyboard-middleware");
+                    let config_dir = home_dir.join(".config/keymux");
                     let config_path = config_dir.join("config.ron");
 
                     if config_path.exists() {
@@ -1021,7 +1021,7 @@ impl AsyncDaemon {
                 Err(_) => continue,
             };
 
-            let config_path = home_dir.join(".config/keyboard-middleware/config.ron");
+            let config_path = home_dir.join(".config/keymux/config.ron");
             if config_path.exists() {
                 // Try to load and validate
                 let new_config = match crate::config::Config::load(&config_path) {

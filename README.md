@@ -1,4 +1,4 @@
-# keyboard-middleware ⌨️
+# keymux ⌨️
 
 **QMK-inspired keyboard customization for Linux** - A blazing-fast, zero-latency keyboard middleware daemon that brings advanced QMK features to any keyboard
 
@@ -35,15 +35,15 @@
 
 **Precompiled binary (default, fast):**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/fibsussy/keyboard-middleware/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/fibsussy/keymux/main/install.sh | bash
 ```
 
 **Or build from source:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/fibsussy/keyboard-middleware/main/install.sh | bash -s local
+curl -fsSL https://raw.githubusercontent.com/fibsussy/keymux/main/install.sh | bash -s local
 ```
 
-**Note:** For security, inspect the install script before running it. View it [here](https://github.com/fibsussy/keyboard-middleware/blob/main/install.sh).
+**Note:** For security, inspect the install script before running it. View it [here](https://github.com/fibsussy/keymux/blob/main/install.sh).
 
 ### Manual Installation
 
@@ -59,58 +59,58 @@ sudo usermod -a -G input $USER
 
 ```bash
 # Clone and build
-git clone https://github.com/fibsussy/keyboard-middleware.git
-cd keyboard-middleware
+git clone https://github.com/fibsussy/keymux.git
+cd keymux
 cargo build --release
 
 # Install
-sudo cp target/release/keyboard-middleware /usr/bin/
-sudo cp keyboard-middleware.service /usr/lib/systemd/system/
-sudo cp keyboard-middleware-niri.service /usr/lib/systemd/user/
-sudo cp config.example.ron /usr/share/doc/keyboard-middleware/
+sudo cp target/release/keymux /usr/bin/
+sudo cp keymux.service /usr/lib/systemd/system/
+sudo cp keymux-niri.service /usr/lib/systemd/user/
+sudo cp config.example.ron /usr/share/doc/keymux/
 
 # Enable and start root daemon
-sudo systemctl enable --now keyboard-middleware.service
+sudo systemctl enable --now keymux.service
 ```
 
 ### Post-Installation Setup
 
 1. **Copy the example config:**
 ```bash
-mkdir -p ~/.config/keyboard-middleware
-cp /usr/share/doc/keyboard-middleware/config.example.ron ~/.config/keyboard-middleware/config.ron
+mkdir -p ~/.config/keymux
+cp /usr/share/doc/keymux/config.example.ron ~/.config/keymux/config.ron
 ```
 
 2. **Edit your config:**
 ```bash
-$EDITOR ~/.config/keyboard-middleware/config.ron
+$EDITOR ~/.config/keymux/config.ron
 ```
 
 3. **Select which keyboards to enable:**
 ```bash
-keyboard-middleware toggle
+keymux toggle
 ```
 
 4. **(Optional) Enable Niri watcher for automatic game mode:**
 ```bash
-systemctl --user enable --now keyboard-middleware-niri.service
+systemctl --user enable --now keymux-niri.service
 ```
 
 ### Systemd Services
 
 **Root daemon (required):** Manages keyboard devices
-- Path: `/usr/lib/systemd/system/keyboard-middleware.service`
-- Enable: `sudo systemctl enable --now keyboard-middleware.service`
+- Path: `/usr/lib/systemd/system/keymux.service`
+- Enable: `sudo systemctl enable --now keymux.service`
 
 **User service (optional):** Watches Niri windows for automatic game mode
-- Path: `/usr/lib/systemd/user/keyboard-middleware-niri.service`
-- Enable: `systemctl --user enable --now keyboard-middleware-niri.service`
+- Path: `/usr/lib/systemd/user/keymux-niri.service`
+- Enable: `systemctl --user enable --now keymux-niri.service`
 
 ## 📖 Configuration Guide
 
 ### Configuration File Location
 
-`~/.config/keyboard-middleware/config.ron`
+`~/.config/keymux/config.ron`
 
 ### Basic Structure
 
@@ -353,8 +353,8 @@ The MT system can learn your typing patterns and personalize thresholds per key:
 - **Starts immediately**: Begins learning after first tap (no minimum sample requirement)
 - **Game mode aware**: Pauses learning during games to avoid skewing data
 
-View statistics: `keyboard-middleware adaptive-stats`
-Clear statistics: `keyboard-middleware clear-stats`
+View statistics: `keymux adaptive-stats`
+Clear statistics: `keymux clear-stats`
 
 ### Game Mode Detection
 
@@ -363,7 +363,7 @@ Game mode activates automatically when:
 2. **Gamescope**: Window manager reports gamescope app ID
 3. **IS_GAME env var**: Process has `IS_GAME=1` environment variable
 
-Manual toggle: `keyboard-middleware gamemode [on|off]`
+Manual toggle: `keymux gamemode [on|off]`
 
 ## 🎮 Usage
 
@@ -371,58 +371,58 @@ Manual toggle: `keyboard-middleware gamemode [on|off]`
 
 ```bash
 # Start daemon (automatically started by systemd)
-keyboard-middleware daemon
+keymux daemon
 
 # Check status
-systemctl status keyboard-middleware
+systemctl status keymux
 
 # View live logs
-journalctl -u keyboard-middleware -f
+journalctl -u keymux -f
 
 # Restart daemon
-systemctl restart keyboard-middleware
+systemctl restart keymux
 ```
 
 ### Keyboard Management
 
 ```bash
 # List all detected keyboards
-keyboard-middleware list
+keymux list
 
 # Toggle which keyboards are enabled (interactive)
-keyboard-middleware toggle
+keymux toggle
 
 # Validate your config
-keyboard-middleware validate
+keymux validate
 
 # Reload config (automatic on file save, but manual trigger available)
-keyboard-middleware reload
+keymux reload
 
 # Toggle game mode manually
-keyboard-middleware gamemode on
-keyboard-middleware gamemode off
+keymux gamemode on
+keymux gamemode off
 
 # View adaptive timing statistics
-keyboard-middleware adaptive-stats
+keymux adaptive-stats
 
 # Clear adaptive timing statistics (prompts for confirmation)
-keyboard-middleware clear-stats
+keymux clear-stats
 
 # Debug mode (show all keyboard events in real-time)
-keyboard-middleware debug
+keymux debug
 ```
 
 ### Shell Completions
 
 ```bash
 # Bash
-keyboard-middleware completion bash | sudo tee /usr/share/bash-completion/completions/keyboard-middleware
+keymux completion bash | sudo tee /usr/share/bash-completion/completions/keymux
 
 # Zsh
-keyboard-middleware completion zsh | sudo tee /usr/share/zsh/site-functions/_keyboard-middleware
+keymux completion zsh | sudo tee /usr/share/zsh/site-functions/_keymux
 
 # Fish
-keyboard-middleware completion fish > ~/.config/fish/completions/keyboard-middleware.fish
+keymux completion fish > ~/.config/fish/completions/keymux.fish
 ```
 
 ## 🐛 Troubleshooting
@@ -440,7 +440,7 @@ Then log out and back in.
 Another process is grabbing your keyboard. Check for:
 ```bash
 # Kill any existing instances
-pkill -f keyboard-middleware
+pkill -f keymux
 
 # Check for other remapping tools
 ps aux | grep -E "kmonad|keyd|xremap"
@@ -450,7 +450,7 @@ ps aux | grep -E "kmonad|keyd|xremap"
 
 Watch the logs when editing config:
 ```bash
-journalctl -u keyboard-middleware -f
+journalctl -u keymux -f
 ```
 
 Config errors show desktop notifications and keep the previous working config.
@@ -459,7 +459,7 @@ Config errors show desktop notifications and keep the previous working config.
 
 Ensure the daemon is running:
 ```bash
-systemctl status keyboard-middleware
+systemctl status keymux
 ```
 
 Check file watcher is working (should see "Config reloaded" in logs when you save).
@@ -474,7 +474,7 @@ Check file watcher is working (should see "Config reloaded" in logs when you sav
 **Option 2: Enable adaptive timing** (recommended)
 - Set `mt_config.enable_adaptive_timing: true` (enabled by default)
 - The system learns your typing patterns and personalizes thresholds per key
-- View statistics: `keyboard-middleware adaptive-stats`
+- View statistics: `keymux adaptive-stats`
 - Increase safety margin: `mt_config.target_margin_ms: 40` (default: 30)
 
 **Option 3: Adjust detection features**
@@ -515,3 +515,5 @@ MIT License - See [LICENSE](LICENSE) for details.
 
 - Inspired by [QMK Firmware](https://qmk.fm/)
 - Built with Rust and [evdev](https://github.com/emberian/evdev)
+test change
+test change

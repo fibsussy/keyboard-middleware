@@ -1,11 +1,11 @@
 [Unit]
 Description=Keyboard Middleware Async Root Daemon
-Documentation=https://github.com/fibsussy/keyboard-middleware
+Documentation=https://github.com/fibsussy/keymux
 After=local-fs.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/keyboard-middleware daemon
+ExecStart=/usr/bin/keymux daemon
 Restart=always
 RestartSec=5
 Environment="RUST_LOG=info"

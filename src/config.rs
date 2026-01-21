@@ -596,13 +596,13 @@ impl Config {
             let home_dir = crate::get_user_home_dir(uid)?;
             Ok(home_dir
                 .join(".config")
-                .join("keyboard-middleware")
+                .join("keymux")
                 .join("config.ron"))
         } else {
             // Normal case: use dirs crate
             let config_dir =
                 dirs::config_dir().ok_or_else(|| anyhow::anyhow!("Failed to get config dir"))?;
-            Ok(config_dir.join("keyboard-middleware").join("config.ron"))
+            Ok(config_dir.join("keymux").join("config.ron"))
         }
     }
 

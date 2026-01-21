@@ -20,14 +20,14 @@ jobs:
         run: cross build --release --target ${{ matrix.arch }}-unknown-${{ matrix.os }}-gnu
       - name: Create tarball
         run: |
-          mv target/${{ matrix.arch }}-unknown-${{ matrix.os }}-gnu/release/keyboard-middleware keyboard-middleware
-          tar -czf keyboard-middleware-${{ matrix.os }}-${{ matrix.arch }}.tar.gz keyboard-middleware
+          mv target/${{ matrix.arch }}-unknown-${{ matrix.os }}-gnu/release/keymux keymux
+          tar -czf keymux-${{ matrix.os }}-${{ matrix.arch }}.tar.gz keymux
       - name: Generate checksum
-        run: sha256sum keyboard-middleware-${{ matrix.os }}-${{ matrix.arch }}.tar.gz > keyboard-middleware-${{ matrix.os }}-${{ matrix.arch }}.sha256
+        run: sha256sum keymux-${{ matrix.os }}-${{ matrix.arch }}.tar.gz > keymux-${{ matrix.os }}-${{ matrix.arch }}.sha256
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: keyboard-middleware-${{ matrix.os }}-${{ matrix.arch }}
+          name: keymux-${{ matrix.os }}-${{ matrix.arch }}
           path: |
-            keyboard-middleware-${{ matrix.os }}-${{ matrix.arch }}.tar.gz
-            keyboard-middleware-${{ matrix.os }}-${{ matrix.arch }}.sha256
+            keymux-${{ matrix.os }}-${{ matrix.arch }}.tar.gz
+            keymux-${{ matrix.os }}-${{ matrix.arch }}.sha256

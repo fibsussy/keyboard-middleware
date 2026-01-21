@@ -85,7 +85,7 @@ pub fn run_list() -> Result<()> {
         println!(
             "  {} Run {} to enable keyboards",
             "Tip:".bright_yellow().bold(),
-            "keyboard-middleware toggle".bright_white()
+            "keymux toggle".bright_white()
         );
     } else {
         println!(

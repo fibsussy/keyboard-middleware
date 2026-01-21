@@ -59,7 +59,7 @@ pub struct KeyboardInfo {
 
 /// Get the IPC socket path for root daemon
 pub fn get_root_socket_path() -> PathBuf {
-    Path::new("/run").join("keyboard-middleware.sock")
+    Path::new("/run").join("keymux.sock")
 }
 
 /// Get the IPC socket path for user daemon (legacy, for compatibility)
@@ -67,7 +67,7 @@ pub fn get_user_socket_path() -> PathBuf {
     let (uid, _) = crate::get_actual_user_uid();
     let runtime_dir =
         std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| format!("/run/user/{}", uid));
-    Path::new(&runtime_dir).join("keyboard-middleware.sock")
+    Path::new(&runtime_dir).join("keymux.sock")
 }
 
 /// Get the IPC socket path (tries root first, falls back to user)

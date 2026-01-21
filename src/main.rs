@@ -62,7 +62,7 @@ mod window;
 use daemon::AsyncDaemon;
 
 #[derive(Parser)]
-#[command(name = "keyboard-middleware")]
+#[command(name = "keymux")]
 #[command(about = "QMK-inspired keyboard middleware for Linux", long_about = None)]
 #[command(version)]
 struct Cli {
@@ -75,7 +75,7 @@ enum Commands {
     /// Run the keyboard middleware daemon
     #[command(hide = true)]
     Daemon {
-        /// Path to config file (default: ~/.config/keyboard-middleware/config.ron)
+        /// Path to config file (default: ~/.config/keymux/config.ron)
         #[arg(short, long)]
         config: Option<std::path::PathBuf>,
 
@@ -99,7 +99,7 @@ enum Commands {
 
     /// Validate configuration file for errors
     Validate {
-        /// Path to config file (default: ~/.config/keyboard-middleware/config.ron)
+        /// Path to config file (default: ~/.config/keymux/config.ron)
         #[arg(short, long)]
         config: Option<std::path::PathBuf>,
     },
@@ -109,7 +109,7 @@ enum Commands {
 
     /// Show adaptive timing statistics
     AdaptiveStats {
-        /// Path to config file (default: ~/.config/keyboard-middleware/config.ron)
+        /// Path to config file (default: ~/.config/keymux/config.ron)
         #[arg(short, long)]
         config: Option<std::path::PathBuf>,
     },
@@ -190,7 +190,7 @@ fn print_help() {
     println!("{}", "USAGE:".bright_yellow().bold());
     println!(
         "  {} {}",
-        "keyboard-middleware".bright_white(),
+        "keymux".bright_white(),
         "[COMMAND]".dimmed()
     );
     println!();
@@ -241,17 +241,17 @@ fn print_help() {
     println!("{}", "EXAMPLES:".bright_yellow().bold());
     println!(
         "  {}  {}",
-        "keyboard-middleware daemon".bright_white(),
+        "keymux daemon".bright_white(),
         "Start the daemon".dimmed()
     );
     println!(
         "  {}    {}",
-        "keyboard-middleware list".bright_white(),
+        "keymux list".bright_white(),
         "Show all detected keyboards".dimmed()
     );
     println!(
         "  {}  {}",
-        "keyboard-middleware toggle".bright_white(),
+        "keymux toggle".bright_white(),
         "Select keyboards to enable/disable".dimmed()
     );
     println!();
@@ -293,10 +293,10 @@ fn clear_adaptive_stats() -> Result<()> {
         return Ok(());
     }
 
-    let (uid, _) = keyboard_middleware::get_actual_user_uid();
+    let (uid, _) = crate::get_actual_user_uid();
     let home =
-        keyboard_middleware::get_user_home_dir(uid).expect("Failed to get user home directory");
-    let config_dir = home.join(".config").join("keyboard-middleware");
+        crate::get_user_home_dir(uid).expect("Failed to get user home directory");
+    let config_dir = home.join(".config").join("keymux");
 
     let mt_stats = config_dir.join("adaptive_stats.json");
     let all_stats = config_dir.join("all_key_stats.json");
@@ -345,11 +345,11 @@ fn show_adaptive_stats(config_path: Option<&std::path::Path>) -> Result<()> {
 
     // Load config
     let config_path = config_path.map(|p| p.to_path_buf()).unwrap_or_else(|| {
-        let (uid, _) = keyboard_middleware::get_actual_user_uid();
+        let (uid, _) = crate::get_actual_user_uid();
         let home =
-            keyboard_middleware::get_user_home_dir(uid).expect("Failed to get user home directory");
+            crate::get_user_home_dir(uid).expect("Failed to get user home directory");
         home.join(".config")
-            .join("keyboard-middleware")
+            .join("keymux")
             .join("config.ron")
     });
 
@@ -774,7 +774,7 @@ fn run_reload() -> Result<()> {
 }
 
 /// Niri window watcher daemon that monitors window focus changes
-/// and sends game mode updates to the root keyboard-middleware daemon via IPC
+/// and sends game mode updates to the root keymux daemon via IPC
 fn run_niri_daemon() -> Result<()> {
     use std::sync::mpsc;
     use std::thread;
@@ -788,7 +788,7 @@ fn run_niri_daemon() -> Result<()> {
         .with_level(true)
         .init();
 
-    info!("Starting keyboard-middleware-niri watcher");
+    info!("Starting keymux-niri watcher");
 
     // Check if automatic game mode detection is enabled
     if !config::GameMode::auto_detect_enabled() {
@@ -846,7 +846,7 @@ fn run_niri_daemon() -> Result<()> {
                         }
                         Err(e) => {
                             error!("Failed to send game mode update to daemon: {}", e);
-                            error!("Is keyboard-middleware daemon running?");
+                            error!("Is keymux daemon running?");
                         }
                     }
                 }

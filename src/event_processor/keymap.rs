@@ -217,14 +217,14 @@ impl KeymapProcessor {
 
         // Save MT stats
         let mt_path = std::path::PathBuf::from(format!(
-            "{}/.config/keyboard-middleware/adaptive_stats.json",
+            "{}/.config/keymux/adaptive_stats.json",
             home
         ));
         self.mt_processor.save_stats(&mt_path)?;
 
         // Save ALL key stats
         let all_path = std::path::PathBuf::from(format!(
-            "{}/.config/keyboard-middleware/all_key_stats.json",
+            "{}/.config/keymux/all_key_stats.json",
             home
         ));
         self.save_all_key_stats(&all_path)?;
@@ -238,14 +238,14 @@ impl KeymapProcessor {
 
         // Load MT stats
         let mt_path = std::path::PathBuf::from(format!(
-            "{}/.config/keyboard-middleware/adaptive_stats.json",
+            "{}/.config/keymux/adaptive_stats.json",
             home
         ));
         self.mt_processor.load_stats(&mt_path)?;
 
         // Load ALL key stats
         let all_path = std::path::PathBuf::from(format!(
-            "{}/.config/keyboard-middleware/all_key_stats.json",
+            "{}/.config/keymux/all_key_stats.json",
             home
         ));
         self.load_all_key_stats(&all_path)?;

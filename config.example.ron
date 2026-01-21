@@ -2,9 +2,9 @@
 // Keyboard Middleware Configuration Example
 // ============================================================================
 //
-// Copy this to: ~/.config/keyboard-middleware/config.ron
-// View keyboard IDs: keyboard-middleware list
-// Validate config:   keyboard-middleware validate
+// Copy this to: ~/.config/keymux/config.ron
+// View keyboard IDs: keymux list
+// Validate config:   keymux validate
 //
 // TIP: Start simple! Remap a few keys, test, then expand.
 // ============================================================================
@@ -315,7 +315,7 @@
     //
     // Special keymap that activates when gaming is detected
     // Detection is automatic: Steam, Gamescope, or process tree walking
-    // Toggle manually: keyboard-middleware gamemode [on|off]
+    // Toggle manually: keymux gamemode [on|off]
     //
     // Why separate game mode?
     //   - Disable MT/layer switches (can interfere with gaming)
@@ -392,7 +392,7 @@
     //
     // Override settings for specific keyboards
     // Useful when you have multiple keyboards with different preferences
-    // Find keyboard IDs with: keyboard-middleware list
+    // Find keyboard IDs with: keymux list
     //
     // IMPORTANT: The structure is IDENTICAL to the global config!
     // You can copy ANY section from above and paste it here.
@@ -573,42 +573,42 @@
 // ============================================================================
 //
 // List all keyboards and their IDs:
-//     keyboard-middleware list
+//     keymux list
 //
 // Validate your config:
-//     keyboard-middleware validate
+//     keymux validate
 //
 // Reload config (automatic on file save, but manual trigger available):
-//     keyboard-middleware reload
+//     keymux reload
 //
 // Toggle game mode manually:
-//     keyboard-middleware gamemode on
-//     keyboard-middleware gamemode off
+//     keymux gamemode on
+//     keymux gamemode off
 //
 // View adaptive timing statistics:
-//     keyboard-middleware adaptive-stats
+//     keymux adaptive-stats
 //
 // Clear adaptive timing statistics (prompts for confirmation):
-//     keyboard-middleware clear-stats
+//     keymux clear-stats
 //
 // Debug mode (show all keyboard events in real-time):
-//     keyboard-middleware debug
+//     keymux debug
 //
 // ============================================================================
 // TROUBLESHOOTING
 // ============================================================================
 //
 // Problem: "Config validation failed"
-//   Solution: Run `keyboard-middleware validate` to see specific errors
+//   Solution: Run `keymux validate` to see specific errors
 //
 // Problem: "Keys not registering"
-//   Solution: Check `keyboard-middleware list` - keyboard might not be enabled
+//   Solution: Check `keymux list` - keyboard might not be enabled
 //
 // Problem: "MT triggers hold too fast/slow"
 //   Solution 1: Enable adaptive timing (enabled by default) - system learns your patterns
 //   Solution 2: Adjust `tapping_term_ms` (130 = balanced, 150 = slower hold)
 //   Solution 3: Adjust `target_margin_ms` in mt_config (higher = more tap-sensitive)
-//   View stats: `keyboard-middleware adaptive-stats`
+//   View stats: `keymux adaptive-stats`
 //
 // Problem: "MT activates when I don't want it to"
 //   Solution: Try disabling `permissive_hold` in mt_config or increase tapping_term_ms
@@ -618,7 +618,7 @@
 //
 // Problem: "Adaptive timing not learning"
 //   Solution: Ensure `enable_adaptive_timing: true` in mt_config (enabled by default)
-//   Check stats: `keyboard-middleware adaptive-stats`
+//   Check stats: `keymux adaptive-stats`
 //
 // Problem: "W+S both pressed in game, not moving"
 //   Solution: Use SOCD in game_mode (see example above)
