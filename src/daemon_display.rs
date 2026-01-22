@@ -134,9 +134,6 @@ impl DaemonDisplay {
     fn print_daemon_not_running(&self, e: &anyhow::Error) {
         println!("  Status: {}", "✗ Not running".bright_red());
         println!("  Error: {}", e.to_string().dimmed());
-        println!(
-            "  Start: {}",
-            "sudo systemctl start keymux".bright_white()
-        );
+        println!("  Start: {}", "sudo systemctl start keymux".bright_white());
     }
 }

@@ -44,6 +44,31 @@ pub fn get_user_home_dir(uid: u32) -> anyhow::Result<PathBuf> {
     Ok(PathBuf::from(home))
 }
 
+#[derive(Subcommand)]
+enum GamemodeAction {
+    /// Control game mode for currently focused window
+    Window {
+        #[command(subcommand)]
+        action: WindowGamemodeAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum WindowGamemodeAction {
+    /// Invert game mode state for this window
+    Invert,
+    /// Toggle between invert and normal for this window
+    ToggleInvert,
+    /// Use normal automatic detection for this window
+    Normal,
+    /// Always force game mode on for this window
+    AlwaysOn,
+    /// Always force game mode off for this window
+    AlwaysOff,
+    /// List all window-specific overrides
+    List,
+}
+
 pub mod config;
 mod config_manager;
 mod daemon;
@@ -93,6 +118,12 @@ enum Commands {
 
     /// Toggle keyboard enable/disable state
     Toggle,
+
+    /// Control game mode settings
+    Gamemode {
+        #[command(subcommand)]
+        action: GamemodeAction,
+    },
 
     /// Reload configuration from disk
     Reload,
@@ -156,6 +187,9 @@ fn main() -> Result<()> {
         Some(Commands::Toggle) => {
             toggle::run_toggle()?;
         }
+        Some(Commands::Gamemode { action }) => {
+            handle_gamemode_action(&action)?;
+        }
         Some(Commands::Reload) => {
             run_reload()?;
         }
@@ -188,11 +222,7 @@ fn print_help() {
     println!("{}", "QMK-inspired keyboard remapping for Linux".dimmed());
     println!();
     println!("{}", "USAGE:".bright_yellow().bold());
-    println!(
-        "  {} {}",
-        "keymux".bright_white(),
-        "[COMMAND]".dimmed()
-    );
+    println!("  {} {}", "keymux".bright_white(), "[COMMAND]".dimmed());
     println!();
     println!("{}", "COMMANDS:".bright_yellow().bold());
     println!(
@@ -294,8 +324,7 @@ fn clear_adaptive_stats() -> Result<()> {
     }
 
     let (uid, _) = crate::get_actual_user_uid();
-    let home =
-        crate::get_user_home_dir(uid).expect("Failed to get user home directory");
+    let home = crate::get_user_home_dir(uid).expect("Failed to get user home directory");
     let config_dir = home.join(".config").join("keymux");
 
     let mt_stats = config_dir.join("adaptive_stats.json");
@@ -346,11 +375,8 @@ fn show_adaptive_stats(config_path: Option<&std::path::Path>) -> Result<()> {
     // Load config
     let config_path = config_path.map(|p| p.to_path_buf()).unwrap_or_else(|| {
         let (uid, _) = crate::get_actual_user_uid();
-        let home =
-            crate::get_user_home_dir(uid).expect("Failed to get user home directory");
-        home.join(".config")
-            .join("keymux")
-            .join("config.ron")
+        let home = crate::get_user_home_dir(uid).expect("Failed to get user home directory");
+        home.join(".config").join("keymux").join("config.ron")
     });
 
     print!("  → Loading config... ");
@@ -865,5 +891,55 @@ fn run_niri_daemon() -> Result<()> {
     }
 
     info!("Niri watcher stopped");
+    Ok(())
+}
+
+/// Handle gamemode CLI commands
+fn handle_gamemode_action(action: &GamemodeAction) -> Result<()> {
+    use colored::Colorize;
+
+    match action {
+        GamemodeAction::Window { action } => {
+            handle_window_gamemode_action(action)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Handle window-specific gamemode actions
+fn handle_window_gamemode_action(action: &WindowGamemodeAction) -> Result<()> {
+    use colored::Colorize;
+
+    match action {
+        WindowGamemodeAction::Invert => {
+            println!("  {} Window invert not implemented yet", "ℹ".bright_blue());
+        }
+        WindowGamemodeAction::ToggleInvert => {
+            println!(
+                "  {} Window toggle-invert not implemented yet",
+                "ℹ".bright_blue()
+            );
+        }
+        WindowGamemodeAction::Normal => {
+            println!("  {} Window normal not implemented yet", "ℹ".bright_blue());
+        }
+        WindowGamemodeAction::AlwaysOn => {
+            println!(
+                "  {} Window always-on not implemented yet",
+                "ℹ".bright_blue()
+            );
+        }
+        WindowGamemodeAction::AlwaysOff => {
+            println!(
+                "  {} Window always-off not implemented yet",
+                "ℹ".bright_blue()
+            );
+        }
+        WindowGamemodeAction::List => {
+            println!("  {} Window list not implemented yet", "ℹ".bright_blue());
+        }
+    }
+
     Ok(())
 }

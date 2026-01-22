@@ -40,10 +40,9 @@ jobs:
           cargo check
       - name: Bump PKGBUILD versions
         run: |
-          sed -i "s/pkgver=.*/pkgver=${{ steps.bump.outputs.new_version }}+()/" PKGBUILD
-          sed -i "s/pkgver=.*/pkgver=${{ steps.bump.outputs.new_version }}+bin/" PKGBUILD-bin
-          sed -i "s/pkgver=.*/pkgver=${{ steps.bump.outputs.new_version }}+git/" PKGBUILD-git
-          sed -i "s|git+https://github.com/fibsussy/keymux.git#tag=v.*|git+https://github.com/fibsussy/keymux.git#tag=v${{ steps.bump.outputs.new_version }}|" PKGBUILD
+          sed -i "s/pkgver=.*/pkgver=${{ steps.bump.outputs.new_version }}/" PKGBUILD
+          sed -i "s/pkgver=.*/pkgver=${{ steps.bump.outputs.new_version }}/" PKGBUILD-bin
+          sed -i "s/pkgver=.*/pkgver=${{ steps.bump.outputs.new_version }}/" PKGBUILD-git
       - name: Upload version files (uncommitted)
         uses: actions/upload-artifact@v4
         with:

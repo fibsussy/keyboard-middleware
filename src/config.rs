@@ -594,10 +594,7 @@ impl Config {
         if is_sudo {
             // When run with sudo, use actual user's home directory
             let home_dir = crate::get_user_home_dir(uid)?;
-            Ok(home_dir
-                .join(".config")
-                .join("keymux")
-                .join("config.ron"))
+            Ok(home_dir.join(".config").join("keymux").join("config.ron"))
         } else {
             // Normal case: use dirs crate
             let config_dir =
