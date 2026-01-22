@@ -221,10 +221,10 @@ Switch to a different layer while held.
 KC_LALT: TO("nav"),  // Hold Left Alt to activate navigation layer
 ```
 
-#### Socd(key1, key2)
+#### SOCD(key, [opposing_keys...])
 SOCD cleaner for gaming (last-input-priority).
 ```ron
-KC_W: Socd(KC_W, KC_S),  // Pressing W then S = S, release S = W again
+KC_W: SOCD(KC_W, [KC_S]),  // Pressing W then S = S, release S = W again
 ```
 
 #### CMD (Command Runner)
@@ -236,7 +236,7 @@ KC_F2: CMD("/usr/bin/playerctl play-pause"),
 
 ### Example Configurations
 
-#### Minimal Config (Home Row Mods Only)
+#### Minimal Config (Mod-Tap Only)
 
 ```ron
 (
@@ -248,13 +248,13 @@ KC_F2: CMD("/usr/bin/playerctl play-pause"),
         KC_CAPS: Key(KC_ESC),
         KC_ESC: Key(KC_GRV),
 
-        // Home row mods - left hand
+        // Mod-Tap - left hand
         KC_A: MT(KC_A, KC_LGUI),
         KC_S: MT(KC_S, KC_LALT),
         KC_D: MT(KC_D, KC_LCTL),
         KC_F: MT(KC_F, KC_LSFT),
 
-        // Home row mods - right hand
+        // Mod-Tap - right hand
         KC_J: MT(KC_J, KC_RSFT),
         KC_K: MT(KC_K, KC_RCTL),
         KC_L: MT(KC_L, KC_RALT),
@@ -363,7 +363,7 @@ Game mode activates automatically when:
 2. **Gamescope**: Window manager reports gamescope app ID
 3. **IS_GAME env var**: Process has `IS_GAME=1` environment variable
 
-Manual toggle: `keymux gamemode [on|off]`
+Game mode is controlled automatically via the Niri daemon or can be toggled via IPC
 
 ## 🎮 Usage
 
@@ -398,9 +398,8 @@ keymux validate
 # Reload config (automatic on file save, but manual trigger available)
 keymux reload
 
-# Toggle game mode manually
-keymux gamemode on
-keymux gamemode off
+# Game mode is automatically detected when running Steam/Gamescope
+# Manual toggle requires sending IPC requests to the daemon
 
 # View adaptive timing statistics
 keymux adaptive-stats
@@ -515,5 +514,3 @@ MIT License - See [LICENSE](LICENSE) for details.
 
 - Inspired by [QMK Firmware](https://qmk.fm/)
 - Built with Rust and [evdev](https://github.com/emberian/evdev)
-test change
-test change

@@ -353,7 +353,7 @@
             //
             // You can cancel multiple keys with one SOCD definition
             // Example: W cancels both S (back) and DOWN (down in nav layer)
-            // KC_W: SOCD(KC_W, [KC_S, KC_DOWN]),
+            // KC_W: SOCD(Key(KC_W), [Key(KC_S), Key(KC_DOWN)]),
         },
     ),
 

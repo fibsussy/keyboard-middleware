@@ -258,11 +258,8 @@ remaps: {
 3. **IS_GAME env var**: Detects games setting IS_GAME=1
 4. **Process tree walk**: Walks 10 levels up to find gaming processes
 
-**Manual toggle:**
-```bash
-keymux gamemode on   # Enable
-keymux gamemode off  # Disable  
-```
+**Automatic toggle:**
+Game mode is automatically detected via Steam/Gamescope or IS_GAME environment variable
 
 **Configuration:**
 ```ron
